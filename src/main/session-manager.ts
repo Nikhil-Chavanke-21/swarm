@@ -1,11 +1,12 @@
-import { readFile, writeFile, mkdir } from 'fs/promises'
-import { createReadStream } from 'fs'
+import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { homedir } from 'os'
-import * as readline from 'readline'
-
-const SWARM_DIR = join(homedir(), '.swarm')
-const INDEX_PATH = join(SWARM_DIR, 'sessions-index.json')
+import {
+  getSessions,
+  getSessionsByAgent,
+  createSession as repoCreateSession,
+  updateSession,
+  type CreateSessionInput
+} from './database/repositories'
 
 export interface SessionRecord {
   id: string
@@ -18,40 +19,48 @@ export interface SessionRecord {
   endedAt?: string
   durationMs?: number
   prompt: string
-  logDir: string   // directory containing <id>.log and <id>.txt
-  claudeSessionId?: string  // UUID from ~/.claude/projects/ for --resume
+  logDir: string
+  claudeSessionId?: string
 }
 
-async function loadIndex(): Promise<SessionRecord[]> {
-  try {
-    const raw = await readFile(INDEX_PATH, 'utf-8')
-    return JSON.parse(raw) as SessionRecord[]
-  } catch {
-    return []
+function dbRowToSessionRecord(row: Record<string, unknown>): SessionRecord {
+  return {
+    id: row.id as string,
+    agentId: row.agent_id as string,
+    agentName: row.agent_name as string,
+    instanceId: row.instance_id as string,
+    instanceIndex: row.instance_index as number,
+    instanceTag: row.instance_tag as string | undefined,
+    startedAt: row.started_at as string,
+    endedAt: row.ended_at as string | undefined,
+    durationMs: row.duration_ms as number | undefined,
+    prompt: row.prompt as string,
+    logDir: row.log_dir as string,
+    claudeSessionId: row.claude_session_id as string | undefined
   }
 }
 
-async function saveIndex(records: SessionRecord[]): Promise<void> {
-  await mkdir(SWARM_DIR, { recursive: true })
-  await writeFile(INDEX_PATH, JSON.stringify(records, null, 2), 'utf-8')
-}
-
 export async function addSessionRecord(record: SessionRecord): Promise<void> {
-  const records = await loadIndex()
-  records.unshift(record)  // newest first
-  await saveIndex(records)
+  const input: CreateSessionInput = {
+    agentId: record.agentId,
+    agentName: record.agentName,
+    instanceId: record.instanceId,
+    instanceIndex: record.instanceIndex,
+    instanceTag: record.instanceTag,
+    prompt: record.prompt,
+    logDir: record.logDir,
+    claudeSessionId: record.claudeSessionId
+  }
+  await repoCreateSession(input)
 }
 
 export async function closeSessionRecord(sessionId: string, endedAt: string, durationMs: number): Promise<void> {
-  const records = await loadIndex()
-  const updated = records.map((r) =>
-    r.id === sessionId ? { ...r, endedAt, durationMs } : r
-  )
-  await saveIndex(updated)
+  await updateSession(sessionId, { endedAt, durationMs })
 }
 
 export async function listSessionRecords(): Promise<SessionRecord[]> {
-  return loadIndex()
+  const rows = await getSessions(500)
+  return rows.map(dbRowToSessionRecord)
 }
 
 export async function readSessionLog(sessionId: string, logDir: string): Promise<string> {
@@ -63,7 +72,6 @@ export async function readSessionLog(sessionId: string, logDir: string): Promise
   }
 }
 
-// Same comprehensive regex used in session-logger.ts
 function stripAnsiForSearch(str: string): string {
   return str
     // eslint-disable-next-line no-control-regex
@@ -93,16 +101,13 @@ export async function searchSessionText(
   const logPath = join(logDir, `${sessionId}.log`)
   try {
     let content = await readFile(txtPath, 'utf-8')
-    // If the .txt still has escape chars it was written by the old broken stripper — re-strip from .log
     if (content.includes('\x1b')) {
       const raw = await readFile(logPath, 'utf-8')
       content = stripAnsiForSearch(raw)
-      // Rewrite the fixed .txt so future searches are fast
       await writeFile(txtPath, content, 'utf-8')
     }
     return content.toLowerCase().includes(query.toLowerCase())
   } catch {
-    // Fall back to stripping the .log directly
     try {
       const raw = await readFile(logPath, 'utf-8')
       return stripAnsiForSearch(raw).toLowerCase().includes(query.toLowerCase())
@@ -113,21 +118,17 @@ export async function searchSessionText(
 }
 
 export async function updateSessionClaudeId(sessionId: string, claudeSessionId: string): Promise<void> {
-  const records = await loadIndex()
-  const updated = records.map((r) =>
-    r.id === sessionId ? { ...r, claudeSessionId } : r
-  )
-  await saveIndex(updated)
+  await updateSession(sessionId, { claudeSessionId })
 }
 
 export async function searchSessions(query: string, agentId?: string): Promise<SessionRecord[]> {
-  const records = await loadIndex()
-  const filtered = agentId ? records.filter((r) => r.agentId === agentId) : records
+  const rows = agentId ? await getSessionsByAgent(agentId) : await getSessions(500)
+  const records = rows.map(dbRowToSessionRecord)
 
-  if (!query.trim()) return filtered
+  if (!query.trim()) return records
 
   const results: SessionRecord[] = []
-  for (const record of filtered) {
+  for (const record of records) {
     const matches = await searchSessionText(record.id, record.logDir, query)
     if (matches) results.push(record)
   }

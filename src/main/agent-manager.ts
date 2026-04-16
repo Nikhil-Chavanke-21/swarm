@@ -2,12 +2,23 @@ import { readdir, readFile, mkdir, writeFile } from 'fs/promises'
 import { v4 as uuid } from 'uuid'
 import { join } from 'path'
 import { homedir } from 'os'
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { stringify as stringifyYaml } from 'yaml'
 import { spawn } from 'child_process'
 import { BrowserWindow } from 'electron'
 import { spawnPty } from './pty-manager'
 import { addSessionRecord, closeSessionRecord, updateSessionClaudeId } from './session-manager'
 import { deleteAllCrons } from './cron-manager'
+import {
+  getAgents as repoGetAgents,
+  getAgent as repoGetAgent,
+  createAgent as repoCreateAgent,
+  updateAgent as repoUpdateAgent,
+  deleteAgent as repoDeleteAgent,
+  getInstances as repoGetInstances,
+  createInstance as repoCreateInstance,
+  updateInstance as repoUpdateInstance,
+  deleteInstance as repoDeleteInstance,
+} from './database/repositories'
 
 export interface AgentArg {
   name: string
@@ -24,17 +35,15 @@ export const AVAILABLE_REPOS = {
 
 export type RepoId = keyof typeof AVAILABLE_REPOS
 
-// Persistent workspace folder for an agent
 export interface AgentInstance {
   index: number
   id: string
   tag?: string
   workingDir: string
   createdAt: string
-  ready: boolean  // false while repos are being cloned
+  ready: boolean
 }
 
-// Active terminal session (in-memory only)
 export interface AgentSession {
   id: string
   agentId: string
@@ -70,7 +79,6 @@ const SWARM_DIR = join(homedir(), '.swarm')
 const AGENTS_DIR = join(SWARM_DIR, 'agents')
 const BASE_CLAUDE_MD_PATH = join(SWARM_DIR, 'CLAUDE.md')
 
-// In-memory active sessions
 const sessions = new Map<string, AgentSession>()
 
 const DEFAULT_BASE_CLAUDE_MD = `# Swarm — Base Agent Rules
@@ -112,63 +120,55 @@ const DEFAULT_BASE_CLAUDE_MD = `# Swarm — Base Agent Rules
 
 `
 
-async function ensureDirs(): Promise<void> {
+async function ensureBaseDirs(): Promise<void> {
   await mkdir(AGENTS_DIR, { recursive: true })
   try {
     await readFile(BASE_CLAUDE_MD_PATH, 'utf-8')
   } catch {
     await writeFile(BASE_CLAUDE_MD_PATH, DEFAULT_BASE_CLAUDE_MD, 'utf-8')
   }
+}
 
-  // Seed the base claude agent on first launch
-  const baseAgentDir = join(AGENTS_DIR, 'claude')
-  try {
-    await readFile(join(baseAgentDir, 'CLAUDE.md'), 'utf-8')
-  } catch {
-    await mkdir(baseAgentDir, { recursive: true })
-    await writeFile(join(baseAgentDir, 'CLAUDE.md'),
-      `---\nname: claude\ndescription: A plain Claude Code session with no configuration.\n---\n`,
-      'utf-8'
-    )
-    // Create instance 1
-    const instanceDir = join(baseAgentDir, 'instances', '1')
-    await mkdir(instanceDir, { recursive: true })
-    await writeFile(
-      join(baseAgentDir, 'instances.json'),
-      JSON.stringify([{ index: 1, id: '1', workingDir: instanceDir, createdAt: new Date().toISOString(), ready: true }], null, 2),
-      'utf-8'
-    )
+// ─── DB row → app type mappers ──────────────────────────────────────────────
+
+function dbRowToAgentDefinition(
+  row: Record<string, unknown>,
+  instances: AgentInstance[]
+): AgentDefinition {
+  const id = row.id as string
+  const agentDir = join(AGENTS_DIR, id)
+  const claudeMdPath = join(agentDir, 'CLAUDE.md')
+  const settingsPath = join(agentDir, '.claude', 'settings.local.json')
+  const allowedCommands = (row.allowed_commands as string[]) || []
+
+  return {
+    id,
+    name: (row.name as string) || '',
+    emoji: (row.emoji as string) || '🤖',
+    description: (row.description as string) || '',
+    useWhen: (row.use_when as string) || '',
+    claudeMdPath,
+    claudeMdContent: (row.claude_md_content as string) || '',
+    settingsPath: allowedCommands.length > 0 ? settingsPath : undefined,
+    settings: allowedCommands.length > 0 ? { permissions: { allow: allowedCommands } } : {},
+    allowedCommands,
+    args: (row.args as AgentArg[]) || [],
+    mcpRequirements: (row.mcp_requirements as string[]) || [],
+    repos: (row.repos as RepoId[]) || [],
+    workingDir: agentDir,
+    instances
   }
 }
 
-function parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
-  if (!match) return { frontmatter: {}, body: content }
-  try {
-    const frontmatter = parseYaml(match[1]) as Record<string, unknown>
-    return { frontmatter, body: match[2] }
-  } catch {
-    return { frontmatter: {}, body: content }
+function dbRowToInstance(row: Record<string, unknown>): AgentInstance {
+  return {
+    index: row.index as number,
+    id: row.id as string,
+    tag: row.tag as string | undefined,
+    workingDir: row.working_dir as string,
+    createdAt: row.created_at as string,
+    ready: row.ready as boolean
   }
-}
-
-// ─── instances.json helpers ──────────────────────────────────────────────────
-
-function instancesFilePath(agentDir: string): string {
-  return join(agentDir, 'instances.json')
-}
-
-async function loadInstancesFromDisk(agentDir: string): Promise<AgentInstance[]> {
-  try {
-    const raw = await readFile(instancesFilePath(agentDir), 'utf-8')
-    return JSON.parse(raw) as AgentInstance[]
-  } catch {
-    return []
-  }
-}
-
-async function saveInstancesToDisk(agentDir: string, instances: AgentInstance[]): Promise<void> {
-  await writeFile(instancesFilePath(agentDir), JSON.stringify(instances, null, 2), 'utf-8')
 }
 
 // ─── clone helpers ────────────────────────────────────────────────────────────
@@ -229,116 +229,73 @@ function cloneRepo(destDir: string, repo: RepoId, instanceId: string): Promise<v
   })
 }
 
-// ─── agent loader ─────────────────────────────────────────────────────────────
+// ─── agent loader (from Supabase) ────────────────────────────────────────────
 
-async function loadAgent(agentDir: string): Promise<AgentDefinition | null> {
-  const claudeMdPath = join(agentDir, 'CLAUDE.md')
+export async function listAgents(): Promise<AgentDefinition[]> {
+  await ensureBaseDirs()
+  const rows = await repoGetAgents()
+  const agents: AgentDefinition[] = []
+
+  for (const row of rows) {
+    const instanceRows = await repoGetInstances(row.id as string)
+    const instances = instanceRows.map(dbRowToInstance)
+    agents.push(dbRowToAgentDefinition(row, instances))
+  }
+
+  return agents
+}
+
+export async function getAgent(agentId: string): Promise<AgentDefinition | null> {
   try {
-    const content = await readFile(claudeMdPath, 'utf-8')
-    const { frontmatter } = parseFrontmatter(content)
-    const id = agentDir.split('/').pop() || 'unknown'
-
-    let settings: Record<string, unknown> = {}
-    const settingsPath = join(agentDir, '.claude', 'settings.local.json')
-    try {
-      const settingsContent = await readFile(settingsPath, 'utf-8')
-      settings = JSON.parse(settingsContent)
-    } catch {
-      // No settings file
-    }
-
-    const args: AgentArg[] = Array.isArray(frontmatter.args) ? (frontmatter.args as AgentArg[]) : []
-    const mcpRequirements: string[] = Array.isArray(frontmatter.mcp) ? (frontmatter.mcp as string[]) : []
-    const repos: RepoId[] = Array.isArray(frontmatter.repos) ? (frontmatter.repos as RepoId[]) : []
-    const allowedCommands: string[] = (settings as any)?.permissions?.allow || []
-    const instances = await loadInstancesFromDisk(agentDir)
-
-    return {
-      id,
-      name: (frontmatter.name as string) || id.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-      emoji: (frontmatter.emoji as string) || '🤖',
-      description: (frontmatter.description as string) || '',
-      useWhen: (frontmatter.useWhen as string) || '',
-      claudeMdPath,
-      claudeMdContent: content,
-      settingsPath: settings ? settingsPath : undefined,
-      settings,
-      allowedCommands,
-      args,
-      mcpRequirements,
-      repos,
-      workingDir: agentDir,
-      instances
-    }
+    const row = await repoGetAgent(agentId)
+    const instanceRows = await repoGetInstances(agentId)
+    const instances = instanceRows.map(dbRowToInstance)
+    return dbRowToAgentDefinition(row, instances)
   } catch {
     return null
   }
 }
 
-export async function listAgents(): Promise<AgentDefinition[]> {
-  await ensureDirs()
-  const agents: AgentDefinition[] = []
-  try {
-    const entries = await readdir(AGENTS_DIR, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        const agent = await loadAgent(join(AGENTS_DIR, entry.name))
-        if (agent) agents.push(agent)
-      }
-    }
-  } catch {
-    // Directory might not exist yet
-  }
-  return agents
-}
-
-export async function getAgent(agentId: string): Promise<AgentDefinition | null> {
-  return loadAgent(join(AGENTS_DIR, agentId))
-}
-
 // ─── instance management ─────────────────────────────────────────────────────
 
 export async function createInstance(agentId: string): Promise<AgentInstance> {
-  const agentDir = join(AGENTS_DIR, agentId)
   const agent = await getAgent(agentId)
   if (!agent) throw new Error(`Agent not found: ${agentId}`)
 
-  const existing = await loadInstancesFromDisk(agentDir)
-  const index = existing.length > 0 ? Math.max(...existing.map((i) => parseInt(i.id))) + 1 : 1
-  const id = String(index)
-  const workingDir = join(agentDir, 'instances', id)
+  const existingRows = await repoGetInstances(agentId)
+  const index = existingRows.length > 0
+    ? Math.max(...existingRows.map((r) => r.index as number)) + 1
+    : 1
 
+  const agentDir = join(AGENTS_DIR, agentId)
+  const workingDir = join(agentDir, 'instances', String(index))
   await mkdir(workingDir, { recursive: true })
 
-  // Copy agent permissions into the instance folder so Claude picks them up
   if (agent.allowedCommands.length > 0) {
     await writeSettings(workingDir, agent.allowedCommands)
   }
 
-  const instance: AgentInstance = {
+  const ready = agent.repos.length === 0
+  const dbRow = await repoCreateInstance({
+    agentId,
     index,
-    id,
     workingDir,
-    createdAt: new Date().toISOString(),
-    ready: agent.repos.length === 0  // ready immediately if no repos to clone
-  }
+    ready
+  })
 
-  await saveInstancesToDisk(agentDir, [...existing, instance])
+  const instance = dbRowToInstance(dbRow)
 
-  // Clone repos in the background — non-blocking
   if (agent.repos.length > 0) {
+    const dbInstanceId = instance.id
     ;(async () => {
       try {
         for (const repo of agent.repos) {
-          await cloneRepo(workingDir, repo, id)
+          await cloneRepo(workingDir, repo, dbInstanceId)
         }
-        // Mark ready
-        const latest = await loadInstancesFromDisk(agentDir)
-        const updated = latest.map((i) => (i.id === id ? { ...i, ready: true } : i))
-        await saveInstancesToDisk(agentDir, updated)
-        broadcastInstanceReady(agentId, id)
+        await repoUpdateInstance(dbInstanceId, { ready: true })
+        broadcastInstanceReady(agentId, dbInstanceId)
       } catch (err) {
-        console.error(`[agent-manager] cloning failed for instance ${id}:`, err)
+        console.error(`[agent-manager] cloning failed for instance ${dbInstanceId}:`, err)
       }
     })()
   }
@@ -347,30 +304,25 @@ export async function createInstance(agentId: string): Promise<AgentInstance> {
 }
 
 export async function deleteInstance(agentId: string, instanceId: string): Promise<void> {
-  const agentDir = join(AGENTS_DIR, agentId)
-  const instances = await loadInstancesFromDisk(agentDir)
-  const instance = instances.find((i) => i.id === instanceId)
-  if (!instance) return
-
-  const { rm } = await import('fs/promises')
-  await rm(instance.workingDir, { recursive: true, force: true })
-
-  const remaining = instances.filter((i) => i.id !== instanceId)
-  // Re-index
-  const reindexed = remaining.map((i, idx) => ({ ...i, index: idx + 1 }))
-  await saveInstancesToDisk(agentDir, reindexed)
+  try {
+    const { rm } = await import('fs/promises')
+    const rows = await repoGetInstances(agentId)
+    const row = rows.find((r) => (r.id as string) === instanceId)
+    if (row) {
+      await rm(row.working_dir as string, { recursive: true, force: true })
+    }
+  } catch {
+    // Directory may not exist
+  }
+  await repoDeleteInstance(instanceId)
 }
 
 export async function updateInstanceTag(agentId: string, instanceId: string, tag: string): Promise<void> {
-  const agentDir = join(AGENTS_DIR, agentId)
-  const instances = await loadInstancesFromDisk(agentDir)
-  const updated = instances.map((i) => (i.id === instanceId ? { ...i, tag: tag || undefined } : i))
-  await saveInstancesToDisk(agentDir, updated)
+  await repoUpdateInstance(instanceId, { tag: tag || undefined })
 }
 
 // ─── Claude session ID detection ─────────────────────────────────────────────
 
-// Claude encodes the working dir path as the project folder name: replace all / with -
 function getClaudeProjectDir(workingDir: string): string {
   const encoded = workingDir.replace(/\//g, '-')
   return join(homedir(), '.claude', 'projects', encoded)
@@ -455,14 +407,12 @@ export async function spawnAgent(
     logDir
   })
 
-  // Create lock file so cron jobs know a session is running
   const lockFile = join(logDir, '.lock')
   await mkdir(logDir, { recursive: true })
   await writeFile(lockFile, sessionId, 'utf-8')
 
   console.log(`[agent-manager] spawning claude in ${instance.workingDir}, prompt: "${prompt}"`)
   spawnPty(sessionId, instance.workingDir, 'claude', [], prompt || undefined, logDir, () => {
-    // Remove lock file when PTY exits
     import('fs/promises').then(({ unlink }) => unlink(lockFile).catch(() => {}))
   })
 
@@ -512,7 +462,6 @@ export async function resumeAgent(
     logDir
   })
 
-  // Create lock file so cron jobs know a session is running
   const lockFile = join(logDir, '.lock')
   await mkdir(logDir, { recursive: true })
   await writeFile(lockFile, sessionId, 'utf-8')
@@ -542,7 +491,6 @@ export function removeSession(sessionId: string): void {
   sessions.delete(sessionId)
   if (!session) return
 
-  // Remove lock file
   const lockFile = join(session.workingDir, 'sessions', '.lock')
   import('fs/promises').then(({ unlink }) => unlink(lockFile).catch(() => {}))
 
@@ -550,8 +498,6 @@ export function removeSession(sessionId: string): void {
   const durationMs = Date.now() - new Date(session.startedAt).getTime()
   closeSessionRecord(sessionId, endedAt, durationMs).catch(() => {})
 
-  // Scan for the Claude conversation ID so the session can be resumed later.
-  // Small delay to let Claude finish flushing its .jsonl before we read it.
   const workingDir = session.workingDir
   setTimeout(async () => {
     const claudeSessionId = await findClaudeSessionId(workingDir)
@@ -617,51 +563,78 @@ async function writeSettings(agentDir: string, allowedCommands: string[]): Promi
 
 export async function createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
   console.log('[agent-manager] createAgent called')
-  await ensureDirs()
-
-  const id = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-  const agentDir = join(AGENTS_DIR, id)
-  await mkdir(agentDir, { recursive: true })
+  await ensureBaseDirs()
 
   const claudeMdContent = await buildClaudeMd(input)
+
+  // Store metadata in Supabase
+  const dbRow = await repoCreateAgent({
+    name: input.name,
+    emoji: input.emoji,
+    description: input.description,
+    useWhen: input.useWhen,
+    claudeMdContent,
+    args: input.args,
+    mcpRequirements: input.mcpRequirements,
+    allowedCommands: input.allowedCommands,
+    repos: input.repos
+  })
+
+  const agentId = dbRow.id as string
+  const agentDir = join(AGENTS_DIR, agentId)
+  await mkdir(agentDir, { recursive: true })
+
+  // Write to disk for Claude Code
   await writeFile(join(agentDir, 'CLAUDE.md'), claudeMdContent, 'utf-8')
   await writeSettings(agentDir, input.allowedCommands)
 
-  // Auto-create first instance (handles repo cloning)
-  await createInstance(id)
+  // Auto-create first instance
+  await createInstance(agentId)
 
-  return (await loadAgent(agentDir))!
+  return (await getAgent(agentId))!
 }
 
 export async function updateAgent(agentId: string, input: CreateAgentInput): Promise<AgentDefinition> {
-  const oldDir = join(AGENTS_DIR, agentId)
-  const newId = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-
-  let agentDir = oldDir
-  if (newId !== agentId) {
-    agentDir = join(AGENTS_DIR, newId)
-    const { rename } = await import('fs/promises')
-    await rename(oldDir, agentDir)
-  }
-
   const claudeMdContent = await buildClaudeMd(input)
+
+  // Update metadata in Supabase
+  await repoUpdateAgent(agentId, {
+    name: input.name,
+    emoji: input.emoji,
+    description: input.description,
+    useWhen: input.useWhen,
+    claudeMdContent,
+    args: input.args,
+    mcpRequirements: input.mcpRequirements,
+    allowedCommands: input.allowedCommands,
+    repos: input.repos
+  })
+
+  const agentDir = join(AGENTS_DIR, agentId)
+  await mkdir(agentDir, { recursive: true })
+
+  // Update disk files for Claude Code
   await writeFile(join(agentDir, 'CLAUDE.md'), claudeMdContent, 'utf-8')
   await writeSettings(agentDir, input.allowedCommands)
 
   // Propagate updated permissions to all existing instance folders
   if (input.allowedCommands.length > 0) {
-    const instances = await loadInstancesFromDisk(agentDir)
-    for (const inst of instances) {
-      await writeSettings(inst.workingDir, input.allowedCommands)
+    const instanceRows = await repoGetInstances(agentId)
+    for (const inst of instanceRows) {
+      await writeSettings(inst.working_dir as string, input.allowedCommands)
     }
   }
 
-  return (await loadAgent(agentDir))!
+  return (await getAgent(agentId))!
 }
 
 export async function deleteAgent(agentId: string): Promise<void> {
-  // Clean up launchd crons before removing agent files
   await deleteAllCrons(agentId)
+
+  // Delete from Supabase (cascades to instances, sessions, crons)
+  await repoDeleteAgent(agentId)
+
+  // Clean up disk
   const agentDir = join(AGENTS_DIR, agentId)
   const { rm } = await import('fs/promises')
   await rm(agentDir, { recursive: true, force: true })

@@ -1,19 +1,23 @@
-import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
+import { mkdir, writeFile, unlink } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
-import { v4 as uuid } from 'uuid'
+import {
+  getCrons as repoGetCrons,
+  createCron as repoCreateCron,
+  updateCron as repoUpdateCron,
+  deleteCron as repoDeleteCron,
+  getInstances as repoGetInstances
+} from './database/repositories'
 
-const SWARM_DIR = join(homedir(), '.swarm')
-const AGENTS_DIR = join(SWARM_DIR, 'agents')
 const LAUNCH_AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents')
 
 export interface CronSchedule {
-  minute?: number    // 0-59
-  hour?: number      // 0-23
-  weekday?: number   // 0=Sunday, 1=Monday, ... 6=Saturday
-  day?: number       // 1-31
-  month?: number     // 1-12
+  minute?: number
+  hour?: number
+  weekday?: number
+  day?: number
+  month?: number
 }
 
 export interface CronDefinition {
@@ -25,23 +29,17 @@ export interface CronDefinition {
   createdAt: string
 }
 
-// ─── crons.json helpers ──────────────────────────────────────────────────────
+// ─── DB row → app type mapper ───────────────────────────────────────────────
 
-function cronsFilePath(agentId: string): string {
-  return join(AGENTS_DIR, agentId, 'crons.json')
-}
-
-async function loadCrons(agentId: string): Promise<CronDefinition[]> {
-  try {
-    const raw = await readFile(cronsFilePath(agentId), 'utf-8')
-    return JSON.parse(raw) as CronDefinition[]
-  } catch {
-    return []
+function dbRowToCron(row: Record<string, unknown>): CronDefinition {
+  return {
+    id: row.id as string,
+    label: row.label as string,
+    schedule: row.schedule as CronSchedule,
+    args: (row.args as Record<string, string>) || {},
+    enabled: row.enabled as boolean,
+    createdAt: row.created_at as string
   }
-}
-
-async function saveCrons(agentId: string, crons: CronDefinition[]): Promise<void> {
-  await writeFile(cronsFilePath(agentId), JSON.stringify(crons, null, 2), 'utf-8')
 }
 
 // ─── launchd plist helpers ───────────────────────────────────────────────────
@@ -59,20 +57,10 @@ function buildPrompt(args: Record<string, string>): string {
   return Object.entries(args).map(([k, v]) => `${k}: ${v}`).join(' | ')
 }
 
-/**
- * Find the first ready instance for an agent.
- * Returns the working directory or null.
- */
 async function getFirstInstanceDir(agentId: string): Promise<string | null> {
-  const instancesPath = join(AGENTS_DIR, agentId, 'instances.json')
-  try {
-    const raw = await readFile(instancesPath, 'utf-8')
-    const instances = JSON.parse(raw) as { id: string; workingDir: string; ready: boolean }[]
-    const first = instances.find((i) => i.ready)
-    return first?.workingDir ?? null
-  } catch {
-    return null
-  }
+  const rows = await repoGetInstances(agentId)
+  const first = rows.find((r) => r.ready as boolean)
+  return first ? (first.working_dir as string) : null
 }
 
 function buildCalendarInterval(schedule: CronSchedule): string {
@@ -98,11 +86,6 @@ function buildPlist(
   const sessionId = `cron-${cronId}-$(date +%s)`
   const logFile = join(logDir, `cron-${cronId}.log`)
 
-  // The shell script:
-  // 1. Check lock file — skip if another session is running
-  // 2. Create lock file
-  // 3. Run claude -p "prompt" in the instance directory
-  // 4. Remove lock file
   const script = prompt
     ? `if [ -f "${lockFile}" ]; then echo "Skipping — session already running" >> "${logFile}"; exit 0; fi; mkdir -p "${logDir}" && touch "${lockFile}" && cd "${instanceDir}" && claude -p "${prompt.replace(/"/g, '\\"')}" >> "${logFile}" 2>&1; rm -f "${lockFile}"`
     : `if [ -f "${lockFile}" ]; then echo "Skipping — session already running" >> "${logFile}"; exit 0; fi; mkdir -p "${logDir}" && touch "${lockFile}" && cd "${instanceDir}" && claude -p "Run your default workflow." >> "${logFile}" 2>&1; rm -f "${lockFile}"`
@@ -176,7 +159,8 @@ function unloadPlist(label: string): void {
 // ─── public API ──────────────────────────────────────────────────────────────
 
 export async function listCrons(agentId: string): Promise<CronDefinition[]> {
-  return loadCrons(agentId)
+  const rows = await repoGetCrons(agentId)
+  return rows.map(dbRowToCron)
 }
 
 export async function addCron(
@@ -185,22 +169,16 @@ export async function addCron(
   schedule: CronSchedule,
   args: Record<string, string>
 ): Promise<CronDefinition> {
-  const cron: CronDefinition = {
-    id: uuid(),
+  const dbRow = await repoCreateCron({
+    agentId,
     label,
     schedule,
     args,
-    enabled: true,
-    createdAt: new Date().toISOString()
-  }
+    enabled: true
+  })
 
-  const crons = await loadCrons(agentId)
-  crons.push(cron)
-  await saveCrons(agentId, crons)
-
-  // Install and load the launchd plist
+  const cron = dbRowToCron(dbRow)
   await installPlist(agentId, cron)
-
   return cron
 }
 
@@ -209,23 +187,15 @@ export async function updateCron(
   cronId: string,
   updates: { label?: string; schedule?: CronSchedule; args?: Record<string, string>; enabled?: boolean }
 ): Promise<CronDefinition | null> {
-  const crons = await loadCrons(agentId)
-  const idx = crons.findIndex((c) => c.id === cronId)
-  if (idx === -1) return null
+  const dbRow = await repoUpdateCron(cronId, updates)
+  const updated = dbRowToCron(dbRow)
 
-  const old = crons[idx]
-  const updated = { ...old, ...updates }
-  crons[idx] = updated
-  await saveCrons(agentId, crons)
-
-  // Reinstall plist with new settings
   const label = plistLabel(agentId, cronId)
   unloadPlist(label)
 
   if (updated.enabled) {
     await installPlist(agentId, updated)
   } else {
-    // Remove plist file when disabled
     try { await unlink(plistPath(agentId, cronId)) } catch { /* ignore */ }
   }
 
@@ -233,24 +203,22 @@ export async function updateCron(
 }
 
 export async function deleteCron(agentId: string, cronId: string): Promise<void> {
-  const crons = await loadCrons(agentId)
-  const remaining = crons.filter((c) => c.id !== cronId)
-  await saveCrons(agentId, remaining)
+  await repoDeleteCron(cronId)
 
-  // Unload and remove plist
   const label = plistLabel(agentId, cronId)
   unloadPlist(label)
   try { await unlink(plistPath(agentId, cronId)) } catch { /* ignore */ }
 }
 
 export async function deleteAllCrons(agentId: string): Promise<void> {
-  const crons = await loadCrons(agentId)
-  for (const cron of crons) {
-    const label = plistLabel(agentId, cron.id)
+  const rows = await repoGetCrons(agentId)
+  for (const row of rows) {
+    const cronId = row.id as string
+    const label = plistLabel(agentId, cronId)
     unloadPlist(label)
-    try { await unlink(plistPath(agentId, cron.id)) } catch { /* ignore */ }
+    try { await unlink(plistPath(agentId, cronId)) } catch { /* ignore */ }
+    await repoDeleteCron(cronId)
   }
-  await saveCrons(agentId, [])
 }
 
 async function installPlist(agentId: string, cron: CronDefinition): Promise<void> {
@@ -269,12 +237,10 @@ async function installPlist(agentId: string, cron: CronDefinition): Promise<void
   loadPlist(label)
 }
 
-/**
- * Reinstall all enabled crons for an agent (e.g. after instance changes).
- */
 export async function reinstallCrons(agentId: string): Promise<void> {
-  const crons = await loadCrons(agentId)
-  for (const cron of crons) {
+  const rows = await repoGetCrons(agentId)
+  for (const row of rows) {
+    const cron = dbRowToCron(row)
     if (cron.enabled) {
       const label = plistLabel(agentId, cron.id)
       unloadPlist(label)
@@ -283,9 +249,6 @@ export async function reinstallCrons(agentId: string): Promise<void> {
   }
 }
 
-/**
- * Format a CronSchedule into a human-readable string.
- */
 export function formatSchedule(schedule: CronSchedule): string {
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const parts: string[] = []

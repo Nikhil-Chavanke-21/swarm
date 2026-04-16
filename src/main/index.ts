@@ -2,6 +2,8 @@ import { app, BrowserWindow, shell, globalShortcut, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
+import { initDatabase } from './database/supabase'
+import { ensureUser } from './database/repositories'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -33,8 +35,13 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.swarm.app')
+
+  initDatabase(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
+  await ensureUser().catch((err) =>
+    console.warn('[swarm] ensureUser failed (tables may not exist yet):', err)
+  )
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
