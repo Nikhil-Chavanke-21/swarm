@@ -79,3 +79,20 @@ export interface FileEntry {
   isDirectory: boolean
   size: number
 }
+
+export interface CronSchedule {
+  minute?: number
+  hour?: number
+  weekday?: number
+  day?: number
+  month?: number
+}
+
+export interface CronDefinition {
+  id: string
+  label: string
+  schedule: CronSchedule
+  args: Record<string, string>
+  enabled: boolean
+  createdAt: string
+}

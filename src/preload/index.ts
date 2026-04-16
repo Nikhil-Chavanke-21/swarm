@@ -104,7 +104,16 @@ const api = {
   fileRead: (workingDir: string, filePath: string) =>
     ipcRenderer.invoke('file:read', workingDir, filePath),
   fileDownload: (workingDir: string, filePath: string) =>
-    ipcRenderer.invoke('file:download', workingDir, filePath)
+    ipcRenderer.invoke('file:download', workingDir, filePath),
+
+  // Crons
+  cronList: (agentId: string) => ipcRenderer.invoke('cron:list', agentId),
+  cronAdd: (agentId: string, label: string, schedule: Record<string, number | undefined>, args: Record<string, string>) =>
+    ipcRenderer.invoke('cron:add', agentId, label, schedule, args),
+  cronUpdate: (agentId: string, cronId: string, updates: Record<string, unknown>) =>
+    ipcRenderer.invoke('cron:update', agentId, cronId, updates),
+  cronDelete: (agentId: string, cronId: string) =>
+    ipcRenderer.invoke('cron:delete', agentId, cronId)
 }
 
 contextBridge.exposeInMainWorld('api', api)

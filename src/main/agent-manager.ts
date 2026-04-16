@@ -7,6 +7,7 @@ import { spawn } from 'child_process'
 import { BrowserWindow } from 'electron'
 import { spawnPty } from './pty-manager'
 import { addSessionRecord, closeSessionRecord, updateSessionClaudeId } from './session-manager'
+import { deleteAllCrons } from './cron-manager'
 
 export interface AgentArg {
   name: string
@@ -454,8 +455,16 @@ export async function spawnAgent(
     logDir
   })
 
+  // Create lock file so cron jobs know a session is running
+  const lockFile = join(logDir, '.lock')
+  await mkdir(logDir, { recursive: true })
+  await writeFile(lockFile, sessionId, 'utf-8')
+
   console.log(`[agent-manager] spawning claude in ${instance.workingDir}, prompt: "${prompt}"`)
-  spawnPty(sessionId, instance.workingDir, 'claude', [], prompt || undefined, logDir)
+  spawnPty(sessionId, instance.workingDir, 'claude', [], prompt || undefined, logDir, () => {
+    // Remove lock file when PTY exits
+    import('fs/promises').then(({ unlink }) => unlink(lockFile).catch(() => {}))
+  })
 
   return session
 }
@@ -503,7 +512,14 @@ export async function resumeAgent(
     logDir
   })
 
-  spawnPty(sessionId, instance.workingDir, 'claude', ['--resume', claudeSessionId], undefined, logDir)
+  // Create lock file so cron jobs know a session is running
+  const lockFile = join(logDir, '.lock')
+  await mkdir(logDir, { recursive: true })
+  await writeFile(lockFile, sessionId, 'utf-8')
+
+  spawnPty(sessionId, instance.workingDir, 'claude', ['--resume', claudeSessionId], undefined, logDir, () => {
+    import('fs/promises').then(({ unlink }) => unlink(lockFile).catch(() => {}))
+  })
 
   return session
 }
@@ -525,6 +541,10 @@ export function removeSession(sessionId: string): void {
   const session = sessions.get(sessionId)
   sessions.delete(sessionId)
   if (!session) return
+
+  // Remove lock file
+  const lockFile = join(session.workingDir, 'sessions', '.lock')
+  import('fs/promises').then(({ unlink }) => unlink(lockFile).catch(() => {}))
 
   const endedAt = new Date().toISOString()
   const durationMs = Date.now() - new Date(session.startedAt).getTime()
@@ -640,6 +660,8 @@ export async function updateAgent(agentId: string, input: CreateAgentInput): Pro
 }
 
 export async function deleteAgent(agentId: string): Promise<void> {
+  // Clean up launchd crons before removing agent files
+  await deleteAllCrons(agentId)
   const agentDir = join(AGENTS_DIR, agentId)
   const { rm } = await import('fs/promises')
   await rm(agentDir, { recursive: true, force: true })

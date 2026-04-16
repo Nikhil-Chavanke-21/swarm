@@ -4,7 +4,10 @@
   import { sessions } from '../stores/sessions'
   import { deleteAgent, loadAgents } from '../stores/agents'
   import { cloneProgress } from '../stores/cloneProgress'
+  import CronModal from './CronModal.svelte'
   let { agent }: { agent: AgentDefinition } = $props()
+
+  let showCronModal = $state(false)
 
   // Match on both agentId AND instanceId to avoid cross-agent false positives
   function sessionForInstance(instanceId: string) {
@@ -99,6 +102,7 @@
     <span class="agent-name">{agent.name}</span>
     <div class="agent-actions">
       <button class="action-btn" onclick={handleAddInstance} title="Add instance">+</button>
+      <button class="action-btn cron-btn" onclick={(e) => { e.stopPropagation(); showCronModal = true }} title="Scheduled jobs">🕐</button>
       <button class="action-btn" onclick={handleEdit} title="Edit">✏️</button>
       <button
         class="action-btn"
@@ -209,6 +213,8 @@
     {/if}
   </div>
 </div>
+
+<CronModal {agent} bind:visible={showCronModal} />
 
 <style>
   .agent-group {

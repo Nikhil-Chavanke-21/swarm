@@ -21,6 +21,13 @@ import {
   type CreateAgentInput
 } from './agent-manager'
 import { listFiles, readFileContent, downloadFile } from './file-manager'
+import {
+  listCrons,
+  addCron,
+  updateCron,
+  deleteCron,
+  type CronSchedule
+} from './cron-manager'
 
 export function registerIpcHandlers(): void {
   // PTY handlers
@@ -100,5 +107,17 @@ export function registerIpcHandlers(): void {
   )
   ipcMain.handle('file:download', (_event, workingDir: string, filePath: string) =>
     downloadFile(workingDir, filePath)
+  )
+
+  // Cron handlers
+  ipcMain.handle('cron:list', (_event, agentId: string) => listCrons(agentId))
+  ipcMain.handle('cron:add', (_event, agentId: string, label: string, schedule: CronSchedule, args: Record<string, string>) =>
+    addCron(agentId, label, schedule, args)
+  )
+  ipcMain.handle('cron:update', (_event, agentId: string, cronId: string, updates: { label?: string; schedule?: CronSchedule; args?: Record<string, string>; enabled?: boolean }) =>
+    updateCron(agentId, cronId, updates)
+  )
+  ipcMain.handle('cron:delete', (_event, agentId: string, cronId: string) =>
+    deleteCron(agentId, cronId)
   )
 }
