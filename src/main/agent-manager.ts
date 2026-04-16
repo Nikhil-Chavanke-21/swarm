@@ -15,6 +15,7 @@ export interface AgentArg {
   required: boolean
   default?: string
   options?: string[]
+  mcp?: string  // MCP server required when this arg has a value
 }
 
 export interface RepoEntry {

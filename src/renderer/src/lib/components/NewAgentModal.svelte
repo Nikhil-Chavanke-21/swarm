@@ -19,9 +19,18 @@
     agent?.instances.find((i) => i.id === $selectedInstanceId)
   )
 
-  const activeMcpRequirements = $derived(
-    agent ? agent.mcpRequirements : []
-  )
+  // Agent-level MCPs are always required.
+  // Arg-level MCPs are required only when the arg has a non-empty value.
+  const activeMcpRequirements = $derived.by(() => {
+    if (!agent) return []
+    const mcps = new Set(agent.mcpRequirements)
+    for (const arg of agent.args) {
+      if (arg.mcp && argValues[arg.name]?.trim()) {
+        mcps.add(arg.mcp)
+      }
+    }
+    return [...mcps]
+  })
 
   // MCPs that are blocking launch (required but not connected)
   const blockedMcps = $derived(

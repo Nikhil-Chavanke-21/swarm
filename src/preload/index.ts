@@ -6,7 +6,7 @@ export interface CreateAgentInput {
   description: string
   useWhen: string
   claudeMdBody: string
-  args: { name: string; description: string; required: boolean; default?: string; options?: string[] }[]
+  args: { name: string; description: string; required: boolean; default?: string; options?: string[]; mcp?: string }[]
   mcpRequirements: string[]
   allowedCommands: string[]
   repos: { name: string; url: string }[]

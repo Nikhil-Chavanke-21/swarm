@@ -197,7 +197,11 @@
       description: description.trim(),
       useWhen: useWhen.trim(),
       claudeMdBody: claudeMdBody.trim(),
-      args: args.filter((a) => a.name.trim()),
+      args: args.filter((a) => a.name.trim()).map((a) => {
+        const cleaned = { ...a }
+        if (!cleaned.mcp?.trim()) delete cleaned.mcp
+        return cleaned
+      }),
       mcpRequirements,
       allowedCommands: [...packagePerms, ...userPerms],
       repos: repos.filter((r) => r.url.trim()).map((r) => ({ name: '', url: r.url.trim() }))
@@ -327,6 +331,7 @@
                 placeholder="opts: a, b"
                 class="arg-opts"
               />
+              <input type="text" bind:value={arg.mcp} placeholder="MCP" class="arg-mcp" title="MCP required when this arg is filled" />
               <label class="arg-required">
                 <input type="checkbox" bind:checked={arg.required} />
                 Req
@@ -839,6 +844,21 @@
     color: #cdd6f4;
     font-size: 12px;
     outline: none;
+  }
+
+  .arg-mcp {
+    width: 70px;
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 5px 8px;
+    color: #cba6f7;
+    font-size: 11px;
+    outline: none;
+  }
+
+  .arg-mcp:focus {
+    border-color: #cba6f7;
   }
 
   .arg-required {
