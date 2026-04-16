@@ -317,26 +317,31 @@
             <button class="add-btn" onclick={addArg}>+ Add</button>
           </div>
           {#each args as arg, i}
-            <div class="arg-row">
-              <input type="text" bind:value={arg.name} placeholder="Arg name" class="arg-name" />
-              <input type="text" bind:value={arg.description} placeholder="Description" class="arg-desc" />
-              <input type="text" bind:value={arg.default} placeholder="Default" class="arg-default" />
-              <input
-                type="text"
-                value={arg.options?.join(', ') ?? ''}
-                oninput={(e) => {
-                  const v = e.currentTarget.value
-                  arg.options = v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined
-                }}
-                placeholder="opts: a, b"
-                class="arg-opts"
-              />
-              <input type="text" bind:value={arg.mcp} placeholder="MCP" class="arg-mcp" title="MCP required when this arg is filled" />
-              <label class="arg-required">
-                <input type="checkbox" bind:checked={arg.required} />
-                Req
-              </label>
-              <button class="remove-btn" onclick={() => removeArg(i)}>x</button>
+            <div class="arg-block">
+              <div class="arg-row-top">
+                <input type="text" bind:value={arg.name} placeholder="Arg name" class="arg-name" />
+                <input type="text" bind:value={arg.description} placeholder="Description" class="arg-desc" />
+                <button class="remove-btn" onclick={() => removeArg(i)}>x</button>
+              </div>
+              <div class="arg-row-bottom">
+                <input type="text" bind:value={arg.default} placeholder="Default" class="arg-field-sm" />
+                <input
+                  type="text"
+                  value={arg.options?.join(', ') ?? ''}
+                  oninput={(e) => {
+                    const v = e.currentTarget.value
+                    arg.options = v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined
+                  }}
+                  placeholder="Options: a, b, c"
+                  class="arg-field-sm"
+                  style="flex: 1"
+                />
+                <input type="text" bind:value={arg.mcp} placeholder="MCP" class="arg-field-mcp" title="MCP required when this arg is filled" />
+                <label class="arg-required">
+                  <input type="checkbox" bind:checked={arg.required} />
+                  Required
+                </label>
+              </div>
             </div>
           {/each}
         </div>
@@ -514,9 +519,12 @@
     border: 1px solid #313244;
     border-radius: 12px;
     width: 600px;
+    max-width: calc(100vw - 40px);
     max-height: 85vh;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 24px;
+    box-sizing: border-box;
   }
 
   .modal-header {
@@ -795,7 +803,15 @@
     background: #45475a;
   }
 
-  .arg-row {
+  .arg-block {
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 6px;
+  }
+
+  .arg-row-top {
     display: flex;
     gap: 6px;
     align-items: center;
@@ -804,60 +820,72 @@
 
   .arg-name {
     width: 120px;
-    background: #11111b;
+    flex-shrink: 0;
+    background: #181825;
     border: 1px solid #313244;
     border-radius: 4px;
     padding: 5px 8px;
     color: #cdd6f4;
     font-size: 12px;
+    font-weight: 500;
     outline: none;
+  }
+
+  .arg-name:focus {
+    border-color: #89b4fa;
   }
 
   .arg-desc {
     flex: 1;
-    background: #11111b;
+    min-width: 0;
+    background: #181825;
     border: 1px solid #313244;
     border-radius: 4px;
     padding: 5px 8px;
-    color: #cdd6f4;
+    color: #a6adc8;
     font-size: 12px;
     outline: none;
   }
 
-  .arg-default {
+  .arg-desc:focus {
+    border-color: #89b4fa;
+  }
+
+  .arg-row-bottom {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .arg-field-sm {
+    background: #181825;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: #cdd6f4;
+    font-size: 11px;
+    outline: none;
+    min-width: 0;
     width: 80px;
-    background: #11111b;
-    border: 1px solid #313244;
-    border-radius: 4px;
-    padding: 5px 8px;
-    color: #cdd6f4;
-    font-size: 12px;
-    outline: none;
   }
 
-  .arg-opts {
-    width: 100px;
-    background: #11111b;
-    border: 1px solid #313244;
-    border-radius: 4px;
-    padding: 5px 8px;
-    color: #cdd6f4;
-    font-size: 12px;
-    outline: none;
+  .arg-field-sm:focus {
+    border-color: #89b4fa;
   }
 
-  .arg-mcp {
+  .arg-field-mcp {
     width: 70px;
-    background: #11111b;
+    flex-shrink: 0;
+    background: #181825;
     border: 1px solid #313244;
     border-radius: 4px;
-    padding: 5px 8px;
+    padding: 4px 8px;
     color: #cba6f7;
     font-size: 11px;
     outline: none;
   }
 
-  .arg-mcp:focus {
+  .arg-field-mcp:focus {
     border-color: #cba6f7;
   }
 
@@ -868,6 +896,7 @@
     align-items: center;
     gap: 3px;
     white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .arg-required input {
