@@ -26,14 +26,13 @@ export interface AgentArg {
   required: boolean
   default?: string
   options?: string[]
+  mcp?: string  // MCP server required when this arg has a value
 }
 
-export const AVAILABLE_REPOS = {
-  'sales-backend': 'https://github.com/REGIE-io/sales-backend.git',
-  'regie-client-new': 'https://github.com/REGIE-io/regie-client-new.git'
-} as const
-
-export type RepoId = keyof typeof AVAILABLE_REPOS
+export interface RepoEntry {
+  name: string
+  url: string
+}
 
 export interface AgentInstance {
   index: number
@@ -70,7 +69,7 @@ export interface AgentDefinition {
   allowedCommands: string[]
   args: AgentArg[]
   mcpRequirements: string[]
-  repos: RepoId[]
+  repos: RepoEntry[]
   workingDir: string
   instances: AgentInstance[]
 }
@@ -154,7 +153,7 @@ function dbRowToAgentDefinition(
     allowedCommands,
     args: (row.args as AgentArg[]) || [],
     mcpRequirements: (row.mcp_requirements as string[]) || [],
-    repos: (row.repos as RepoId[]) || [],
+    repos: (row.repos as RepoEntry[]) || [],
     workingDir: agentDir,
     instances
   }
@@ -190,14 +189,14 @@ function broadcastInstanceReady(agentId: string, instanceId: string): void {
   }
 }
 
-function cloneRepo(destDir: string, repo: RepoId, instanceId: string): Promise<void> {
+function cloneRepo(destDir: string, repoName: string, repoUrl: string, instanceId: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const repoDir = join(destDir, repo)
+    const repoDir = join(destDir, repoName)
 
     try {
       const fs = require('fs')
       if (fs.statSync(repoDir).isDirectory()) {
-        broadcastCloneProgress(instanceId, repo, 'done')
+        broadcastCloneProgress(instanceId, repoName, 'done')
         resolve()
         return
       }
@@ -205,25 +204,25 @@ function cloneRepo(destDir: string, repo: RepoId, instanceId: string): Promise<v
       // Not cloned yet
     }
 
-    const url = AVAILABLE_REPOS[repo]
-    broadcastCloneProgress(instanceId, repo, 'cloning')
-    console.log(`[agent-manager] cloning ${repo} into ${destDir}`)
+    const url = repoUrl
+    broadcastCloneProgress(instanceId, repoName, 'cloning')
+    console.log(`[agent-manager] cloning ${repoName} into ${destDir}`)
 
     const proc = spawn('git', ['clone', url, repoDir])
 
     proc.on('close', (code) => {
       if (code === 0) {
-        broadcastCloneProgress(instanceId, repo, 'done')
+        broadcastCloneProgress(instanceId, repoName, 'done')
         resolve()
       } else {
         const msg = `git clone exited with code ${code}`
-        broadcastCloneProgress(instanceId, repo, 'error', msg)
+        broadcastCloneProgress(instanceId, repoName, 'error', msg)
         reject(new Error(msg))
       }
     })
 
     proc.on('error', (err) => {
-      broadcastCloneProgress(instanceId, repo, 'error', err.message)
+      broadcastCloneProgress(instanceId, repoName, 'error', err.message)
       reject(err)
     })
   })
@@ -290,7 +289,7 @@ export async function createInstance(agentId: string): Promise<AgentInstance> {
     ;(async () => {
       try {
         for (const repo of agent.repos) {
-          await cloneRepo(workingDir, repo, dbInstanceId)
+          await cloneRepo(workingDir, repo.name, repo.url, dbInstanceId)
         }
         await repoUpdateInstance(dbInstanceId, { ready: true })
         broadcastInstanceReady(agentId, dbInstanceId)
@@ -518,8 +517,34 @@ export interface CreateAgentInput {
   claudeMdBody: string
   args: AgentArg[]
   mcpRequirements: string[]
-  repos: RepoId[]
+  repos: RepoEntry[]
   allowedCommands: string[]
+}
+
+/**
+ * Derive folder names from repo URLs.
+ * If two repos share the same base name, prefix with org to disambiguate.
+ */
+function deriveRepoNames(repos: RepoEntry[]): RepoEntry[] {
+  // Parse org and repo name from each URL
+  const parsed = repos.map((r) => {
+    // Match patterns like github.com/org/repo.git or github.com:org/repo.git
+    const match = r.url.match(/[/:]([^/]+)\/([^/]+?)(?:\.git)?\s*$/)
+    const org = match ? match[1] : ''
+    const base = match ? match[2] : r.url.split('/').pop()?.replace(/\.git$/, '') || r.url
+    return { ...r, org, base }
+  })
+
+  // Find duplicate base names
+  const baseCounts = new Map<string, number>()
+  for (const p of parsed) {
+    baseCounts.set(p.base, (baseCounts.get(p.base) || 0) + 1)
+  }
+
+  return parsed.map((p) => ({
+    name: (baseCounts.get(p.base) || 0) > 1 && p.org ? `${p.org}-${p.base}` : p.base,
+    url: p.url
+  }))
 }
 
 function buildFrontmatter(input: CreateAgentInput): Record<string, unknown> {
@@ -542,7 +567,7 @@ async function buildClaudeMd(input: CreateAgentInput): Promise<string> {
   if (input.repos.length > 0) {
     reposSection = `\n## Repos\n\n`
     for (const repo of input.repos) {
-      reposSection += `- **${repo}:** \`./${repo}\`\n`
+      reposSection += `- **${repo.name}:** \`./${repo.name}\`\n`
     }
     reposSection += `\nThese repos are cloned in your working directory. Reference them using the relative paths above.\n\n`
   }
@@ -564,6 +589,8 @@ async function writeSettings(agentDir: string, allowedCommands: string[]): Promi
 export async function createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
   console.log('[agent-manager] createAgent called')
   await ensureBaseDirs()
+
+  input.repos = deriveRepoNames(input.repos)
 
   const claudeMdContent = await buildClaudeMd(input)
 
@@ -595,6 +622,8 @@ export async function createAgent(input: CreateAgentInput): Promise<AgentDefinit
 }
 
 export async function updateAgent(agentId: string, input: CreateAgentInput): Promise<AgentDefinition> {
+  input.repos = deriveRepoNames(input.repos)
+
   const claudeMdContent = await buildClaudeMd(input)
 
   // Update metadata in Supabase
@@ -640,6 +669,3 @@ export async function deleteAgent(agentId: string): Promise<void> {
   await rm(agentDir, { recursive: true, force: true })
 }
 
-export function getAvailableRepos(): Record<string, string> {
-  return { ...AVAILABLE_REPOS }
-}

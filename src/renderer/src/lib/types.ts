@@ -4,6 +4,7 @@ export interface AgentArg {
   required: boolean
   default?: string
   options?: string[]
+  mcp?: string  // MCP server required when this arg has a value
 }
 
 // Persistent workspace folder
@@ -14,6 +15,11 @@ export interface AgentInstance {
   workingDir: string
   createdAt: string
   ready: boolean
+}
+
+export interface RepoEntry {
+  name: string
+  url: string
 }
 
 export interface AgentDefinition {
@@ -29,7 +35,7 @@ export interface AgentDefinition {
   args: AgentArg[]
   mcpRequirements: string[]
   allowedCommands: string[]
-  repos: string[]
+  repos: RepoEntry[]
   workingDir: string
   instances: AgentInstance[]
 }

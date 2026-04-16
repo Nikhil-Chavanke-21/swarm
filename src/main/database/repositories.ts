@@ -13,6 +13,11 @@ export interface AgentArg {
   options?: string[]
 }
 
+export interface RepoEntry {
+  name: string
+  url: string
+}
+
 export interface CreateAgentInput {
   name: string
   emoji?: string
@@ -22,7 +27,7 @@ export interface CreateAgentInput {
   args?: AgentArg[]
   mcpRequirements?: string[]
   allowedCommands?: string[]
-  repos?: string[]
+  repos?: RepoEntry[]
 }
 
 export interface UpdateAgentInput {
@@ -34,7 +39,7 @@ export interface UpdateAgentInput {
   args?: AgentArg[]
   mcpRequirements?: string[]
   allowedCommands?: string[]
-  repos?: string[]
+  repos?: RepoEntry[]
 }
 
 export interface CreateInstanceInput {

@@ -179,7 +179,7 @@
         {#if isCloning && agent.repos.length > 0}
           <div class="clone-progress">
             {#each agent.repos as repo}
-              {@const repoStatus = $cloneProgress[inst.id]?.[repo] ?? 'pending'}
+              {@const repoStatus = $cloneProgress[inst.id]?.[repo.name] ?? 'pending'}
               <div class="clone-row">
                 <span class="clone-icon">
                   {#if repoStatus === 'done'}<span class="done">✓</span>
@@ -189,7 +189,7 @@
                   {/if}
                 </span>
                 <span class="clone-label" class:active={repoStatus === 'cloning'}>
-                  {repoStatus === 'cloning' ? `Cloning ${repo}...` : repo}
+                  {repoStatus === 'cloning' ? `Cloning ${repo.name}...` : repo.name}
                 </span>
               </div>
             {/each}
@@ -199,8 +199,8 @@
         {#if inst.ready && agent.repos.length > 0}
           <div class="inst-repos">
             {#each agent.repos as repo}
-              <button class="repo-chip" onclick={(e) => openInCursor(e, inst, repo)} title="Open in Cursor">
-                {repo}
+              <button class="repo-chip" onclick={(e) => openInCursor(e, inst, repo.name)} title="Open in Cursor">
+                {repo.name}
               </button>
             {/each}
           </div>
