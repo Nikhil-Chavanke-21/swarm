@@ -1,0 +1,43 @@
+{
+  "name": "swarm",
+  "version": "1.0.0",
+  "description": "Agent management desktop app for Claude Code",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@xterm/addon-search": "^0.16.0",
+    "node-pty": "^1.1.0",
+    "uuid": "^11.1.0",
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/uuid": "^10.0.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "electron": "^35.2.1",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "svelte": "^5.28.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2"
+  },
+  "build": {
+    "appId": "com.swarm.app",
+    "productName": "Swarm",
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    },
+    "files": [
+      "out/**/*"
+    ]
+  }
+}
