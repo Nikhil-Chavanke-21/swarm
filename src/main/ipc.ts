@@ -14,7 +14,6 @@ import {
   createAgent,
   updateAgent,
   deleteAgent,
-  getAvailableRepos,
   createInstance,
   deleteInstance,
   updateInstanceTag,
@@ -62,7 +61,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('agent:resume', (_event, agentId: string, instanceId: string, claudeSessionId: string) =>
     resumeAgent(agentId, instanceId, claudeSessionId)
   )
-  ipcMain.handle('agent:repos', () => getAvailableRepos())
   ipcMain.handle('agent:updateStatus', (_event, sessionId: string, status: string) => {
     updateSessionStatus(sessionId, status)
   })

@@ -16,6 +16,11 @@ export interface AgentInstance {
   ready: boolean
 }
 
+export interface RepoEntry {
+  name: string
+  url: string
+}
+
 export interface AgentDefinition {
   id: string
   name: string
@@ -29,7 +34,7 @@ export interface AgentDefinition {
   args: AgentArg[]
   mcpRequirements: string[]
   allowedCommands: string[]
-  repos: string[]
+  repos: RepoEntry[]
   workingDir: string
   instances: AgentInstance[]
 }

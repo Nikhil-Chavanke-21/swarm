@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store'
-import type { AgentDefinition, AgentArg } from '../types'
+import type { AgentDefinition, AgentArg, RepoEntry } from '../types'
 
 export const agents = writable<AgentDefinition[]>([])
 
@@ -20,7 +20,7 @@ export interface CreateAgentInput {
   args: AgentArg[]
   mcpRequirements: string[]
   allowedCommands: string[]
-  repos: string[]
+  repos: RepoEntry[]
 }
 
 export async function createAgent(input: CreateAgentInput): Promise<void> {

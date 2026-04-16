@@ -1,7 +1,7 @@
 <script lang="ts">
   import { agents, createAgent, updateAgent } from '../stores/agents'
   import { showCreateAgentModal, editingAgentId } from '../stores/ui'
-  import type { AgentArg } from '../types'
+  import type { AgentArg, RepoEntry } from '../types'
 
   let name = $state('')
   let emoji = $state('🤖')
@@ -10,8 +10,7 @@
   let claudeMdBody = $state('')
   let args = $state<AgentArg[]>([])
   let mcpRequirements = $state<string[]>([])
-  let selectedRepos = $state<string[]>([])
-  let availableRepos = $state<Record<string, string>>({})
+  let repos = $state<RepoEntry[]>([])
   let packagePerms = $state<string[]>([])
   let userPerms = $state<string[]>([])
   let newCommand = $state('')
@@ -20,20 +19,10 @@
   let cloneStatus = $state<Record<string, 'cloning' | 'done' | 'error'>>({})
   let cloneError = $state<Record<string, string>>({})
 
-  // Load available repos on mount
   import { onMount, onDestroy } from 'svelte'
   let cleanupCloneProgress: (() => void) | null = null
 
-  onMount(async () => {
-    try {
-      availableRepos = await window.api.agentRepos()
-    } catch {
-      availableRepos = {
-        'sales-backend': 'https://github.com/REGIE-io/sales-backend.git',
-        'regie-client-new': 'https://github.com/REGIE-io/regie-client-new.git'
-      }
-    }
-
+  onMount(() => {
     cleanupCloneProgress = window.api.onCloneProgress(({ repo, status, error }) => {
       cloneStatus = { ...cloneStatus, [repo]: status as 'cloning' | 'done' | 'error' }
       if (error) {
@@ -90,12 +79,24 @@
     }
   }
 
-  function toggleRepo(repoId: string) {
-    if (selectedRepos.includes(repoId)) {
-      selectedRepos = selectedRepos.filter((r) => r !== repoId)
-    } else {
-      selectedRepos = [...selectedRepos, repoId]
-    }
+  let newRepoUrl = $state('')
+
+  function addRepo() {
+    const url = newRepoUrl.trim()
+    if (!url) return
+    if (repos.some((r) => r.url === url)) return // no duplicates
+    repos = [...repos, { name: '', url }]
+    newRepoUrl = ''
+  }
+
+  function removeRepo(index: number) {
+    repos = repos.filter((_, i) => i !== index)
+  }
+
+  /** Derive display name from a git URL: org/repo or just repo */
+  function deriveRepoName(url: string): string {
+    const match = url.match(/[/:]([^/]+)\/([^/]+?)(?:\.git)?$/)
+    return match ? match[2] : url.split('/').pop()?.replace(/\.git$/, '') || url
   }
 
   const editingAgent = $derived(
@@ -139,7 +140,7 @@
       const all = editingAgent.allowedCommands || []
       packagePerms = all.filter((c) => COMMON_PERMISSIONS.includes(c))
       userPerms = all.filter((c) => !COMMON_PERMISSIONS.includes(c))
-      selectedRepos = [...(editingAgent.repos || [])]
+      repos = [...(editingAgent.repos || [])]
     } else {
       name = ''
       emoji = '🤖'
@@ -150,7 +151,7 @@
       mcpRequirements = []
       packagePerms = []
       userPerms = []
-      selectedRepos = []
+      repos = []
       cloneStatus = {}
       cloneError = {}
     }
@@ -199,7 +200,7 @@
       args: args.filter((a) => a.name.trim()),
       mcpRequirements,
       allowedCommands: [...packagePerms, ...userPerms],
-      repos: selectedRepos
+      repos: repos.filter((r) => r.url.trim()).map((r) => ({ name: '', url: r.url.trim() }))
     }))
 
     console.log('[CreateAgent] input:', JSON.stringify(input, null, 2))
@@ -339,21 +340,26 @@
           <div class="section-header">
             <h3>Repos</h3>
           </div>
-          <p class="section-desc">Select repos to clone into the agent's workspace</p>
-          <div class="repo-list">
-            {#each Object.entries(availableRepos) as [repoId, repoUrl]}
-              <label class="repo-option">
-                <input
-                  type="checkbox"
-                  checked={selectedRepos.includes(repoId)}
-                  onchange={() => toggleRepo(repoId)}
-                />
-                <span class="repo-name">{repoId}</span>
-                <span class="repo-url">{repoUrl}</span>
-              </label>
-            {/each}
+          <p class="section-desc">GitHub repositories to clone into the agent's workspace</p>
+          <div class="repo-input-row">
+            <input
+              type="text"
+              bind:value={newRepoUrl}
+              placeholder="https://github.com/org/repo.git"
+              onkeydown={(e) => e.key === 'Enter' && addRepo()}
+            />
+            <button class="add-btn" onclick={addRepo}>+ Add</button>
           </div>
-          {#if selectedRepos.length > 0}
+          {#if repos.length > 0}
+            <div class="repo-tags">
+              {#each repos as repo, i}
+                <span class="repo-tag">
+                  <span class="repo-tag-name">{deriveRepoName(repo.url)}</span>
+                  <span class="repo-tag-url">{repo.url}</span>
+                  <button class="tag-remove" onclick={() => removeRepo(i)}>x</button>
+                </span>
+              {/each}
+            </div>
             <span class="field-hint-muted">Repos will be cloned on agent creation (may take a moment)</span>
           {/if}
         </div>
@@ -432,30 +438,31 @@
         </div>
       </div>
 
-      {#if saving && selectedRepos.length > 0}
+      {#if saving && repos.length > 0}
         <div class="progress-section">
           <h3>Setting up agent...</h3>
-          {#each selectedRepos as repo}
+          {#each repos as repo}
+            {@const rName = deriveRepoName(repo.url)}
             <div class="progress-row">
               <span class="progress-icon">
-                {#if cloneStatus[repo] === 'done'}
+                {#if cloneStatus[rName] === 'done'}
                   <span class="icon-done">✓</span>
-                {:else if cloneStatus[repo] === 'error'}
+                {:else if cloneStatus[rName] === 'error'}
                   <span class="icon-error">✗</span>
-                {:else if cloneStatus[repo] === 'cloning'}
+                {:else if cloneStatus[rName] === 'cloning'}
                   <span class="icon-cloning">↻</span>
                 {:else}
                   <span class="icon-pending">○</span>
                 {/if}
               </span>
               <span class="progress-label">
-                {repo}
-                {#if cloneStatus[repo] === 'cloning'}
+                {rName}
+                {#if cloneStatus[rName] === 'cloning'}
                   — cloning...
-                {:else if cloneStatus[repo] === 'done'}
+                {:else if cloneStatus[rName] === 'done'}
                   — done
-                {:else if cloneStatus[repo] === 'error'}
-                  — failed: {cloneError[repo] || 'unknown error'}
+                {:else if cloneStatus[rName] === 'error'}
+                  — failed: {cloneError[rName] || 'unknown error'}
                 {:else}
                   — waiting
                 {/if}
@@ -632,49 +639,60 @@
     margin: 0 0 8px;
   }
 
-  .repo-list {
+  .repo-input-row {
     display: flex;
-    flex-direction: column;
     gap: 6px;
+    margin-bottom: 8px;
   }
 
-  .repo-option {
+  .repo-input-row input {
+    flex: 1;
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 5px 8px;
+    color: #cdd6f4;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    outline: none;
+  }
+
+  .repo-input-row input:focus {
+    border-color: #89b4fa;
+  }
+
+  .repo-tags {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .repo-tag {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 6px 10px;
     background: #11111b;
     border: 1px solid #313244;
     border-radius: 6px;
-    cursor: pointer;
-    transition: border-color 0.15s;
   }
 
-  .repo-option:hover {
-    border-color: #45475a;
-  }
-
-  .repo-option:has(input:checked) {
-    border-color: #89b4fa;
-    background: color-mix(in srgb, #89b4fa 8%, #11111b);
-  }
-
-  .repo-option input {
-    margin: 0;
-    accent-color: #89b4fa;
-  }
-
-  .repo-name {
+  .repo-tag-name {
     font-size: 13px;
     font-weight: 500;
     color: #cdd6f4;
+    flex-shrink: 0;
   }
 
-  .repo-url {
+  .repo-tag-url {
     font-size: 10px;
     color: #585b70;
-    font-family: monospace;
-    margin-left: auto;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
   }
 
   .perm-grid {

@@ -9,7 +9,7 @@ export interface CreateAgentInput {
   args: { name: string; description: string; required: boolean; default?: string; options?: string[] }[]
   mcpRequirements: string[]
   allowedCommands: string[]
-  repos: string[]
+  repos: { name: string; url: string }[]
 }
 
 const api = {
@@ -49,8 +49,6 @@ const api = {
   agentDelete: (agentId: string) => ipcRenderer.invoke('agent:delete', agentId),
   agentResume: (agentId: string, instanceId: string, claudeSessionId: string) =>
     ipcRenderer.invoke('agent:resume', agentId, instanceId, claudeSessionId),
-  agentRepos: () => ipcRenderer.invoke('agent:repos') as Promise<Record<string, string>>,
-
   onCloneProgress: (callback: (data: { instanceId: string; repo: string; status: string; error?: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { instanceId: string; repo: string; status: string; error?: string }) => callback(data)
     ipcRenderer.on('agent:cloneProgress', handler)

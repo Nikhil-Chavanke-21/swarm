@@ -17,12 +17,10 @@ export interface AgentArg {
   options?: string[]
 }
 
-export const AVAILABLE_REPOS = {
-  'sales-backend': 'https://github.com/REGIE-io/sales-backend.git',
-  'regie-client-new': 'https://github.com/REGIE-io/regie-client-new.git'
-} as const
-
-export type RepoId = keyof typeof AVAILABLE_REPOS
+export interface RepoEntry {
+  name: string
+  url: string
+}
 
 // Persistent workspace folder for an agent
 export interface AgentInstance {
@@ -61,7 +59,7 @@ export interface AgentDefinition {
   allowedCommands: string[]
   args: AgentArg[]
   mcpRequirements: string[]
-  repos: RepoId[]
+  repos: RepoEntry[]
   workingDir: string
   instances: AgentInstance[]
 }
@@ -112,6 +110,46 @@ const DEFAULT_BASE_CLAUDE_MD = `# Swarm — Base Agent Rules
 
 `
 
+// Migration: convert old string repos to { name, url } objects
+const LEGACY_REPO_URLS: Record<string, string> = {
+  'sales-backend': 'https://github.com/REGIE-io/sales-backend.git',
+  'regie-client-new': 'https://github.com/REGIE-io/regie-client-new.git'
+}
+
+async function migrateReposToObjects(): Promise<void> {
+  try {
+    const entries = await readdir(AGENTS_DIR, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      const claudeMdPath = join(AGENTS_DIR, entry.name, 'CLAUDE.md')
+      try {
+        const content = await readFile(claudeMdPath, 'utf-8')
+        const { frontmatter, body } = parseFrontmatter(content)
+        if (!Array.isArray(frontmatter.repos) || frontmatter.repos.length === 0) continue
+
+        // Check if already migrated (first entry is an object)
+        if (typeof frontmatter.repos[0] === 'object') continue
+
+        // Migrate string repos to objects
+        const migratedRepos = (frontmatter.repos as string[]).map((name: string) => ({
+          name,
+          url: LEGACY_REPO_URLS[name] || ''
+        }))
+        frontmatter.repos = migratedRepos
+
+        // Rebuild the CLAUDE.md
+        const newContent = `---\n${stringifyYaml(frontmatter).trim()}\n---\n${body}`
+        await writeFile(claudeMdPath, newContent, 'utf-8')
+        console.log(`[migration] migrated repos for agent ${entry.name}`)
+      } catch {
+        // Skip agents that can't be read
+      }
+    }
+  } catch {
+    // AGENTS_DIR might not exist yet
+  }
+}
+
 async function ensureDirs(): Promise<void> {
   await mkdir(AGENTS_DIR, { recursive: true })
   try {
@@ -139,6 +177,9 @@ async function ensureDirs(): Promise<void> {
       'utf-8'
     )
   }
+
+  // Run migrations
+  await migrateReposToObjects()
 }
 
 function parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } {
@@ -190,14 +231,14 @@ function broadcastInstanceReady(agentId: string, instanceId: string): void {
   }
 }
 
-function cloneRepo(destDir: string, repo: RepoId, instanceId: string): Promise<void> {
+function cloneRepo(destDir: string, repoName: string, repoUrl: string, instanceId: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const repoDir = join(destDir, repo)
+    const repoDir = join(destDir, repoName)
 
     try {
       const fs = require('fs')
       if (fs.statSync(repoDir).isDirectory()) {
-        broadcastCloneProgress(instanceId, repo, 'done')
+        broadcastCloneProgress(instanceId, repoName, 'done')
         resolve()
         return
       }
@@ -205,25 +246,25 @@ function cloneRepo(destDir: string, repo: RepoId, instanceId: string): Promise<v
       // Not cloned yet
     }
 
-    const url = AVAILABLE_REPOS[repo]
-    broadcastCloneProgress(instanceId, repo, 'cloning')
-    console.log(`[agent-manager] cloning ${repo} into ${destDir}`)
+    const url = repoUrl
+    broadcastCloneProgress(instanceId, repoName, 'cloning')
+    console.log(`[agent-manager] cloning ${repoName} into ${destDir}`)
 
     const proc = spawn('git', ['clone', url, repoDir])
 
     proc.on('close', (code) => {
       if (code === 0) {
-        broadcastCloneProgress(instanceId, repo, 'done')
+        broadcastCloneProgress(instanceId, repoName, 'done')
         resolve()
       } else {
         const msg = `git clone exited with code ${code}`
-        broadcastCloneProgress(instanceId, repo, 'error', msg)
+        broadcastCloneProgress(instanceId, repoName, 'error', msg)
         reject(new Error(msg))
       }
     })
 
     proc.on('error', (err) => {
-      broadcastCloneProgress(instanceId, repo, 'error', err.message)
+      broadcastCloneProgress(instanceId, repoName, 'error', err.message)
       reject(err)
     })
   })
@@ -249,7 +290,12 @@ async function loadAgent(agentDir: string): Promise<AgentDefinition | null> {
 
     const args: AgentArg[] = Array.isArray(frontmatter.args) ? (frontmatter.args as AgentArg[]) : []
     const mcpRequirements: string[] = Array.isArray(frontmatter.mcp) ? (frontmatter.mcp as string[]) : []
-    const repos: RepoId[] = Array.isArray(frontmatter.repos) ? (frontmatter.repos as RepoId[]) : []
+    const rawRepos = Array.isArray(frontmatter.repos) ? frontmatter.repos : []
+    const repos: RepoEntry[] = rawRepos.map((r: unknown) => {
+      if (typeof r === 'string') return { name: r, url: '' }
+      const obj = r as Record<string, string>
+      return { name: obj.name || '', url: obj.url || '' }
+    }).filter((r: RepoEntry) => r.name)
     const allowedCommands: string[] = (settings as any)?.permissions?.allow || []
     const instances = await loadInstancesFromDisk(agentDir)
 
@@ -330,7 +376,7 @@ export async function createInstance(agentId: string): Promise<AgentInstance> {
     ;(async () => {
       try {
         for (const repo of agent.repos) {
-          await cloneRepo(workingDir, repo, id)
+          await cloneRepo(workingDir, repo.name, repo.url, id)
         }
         // Mark ready
         const latest = await loadInstancesFromDisk(agentDir)
@@ -572,8 +618,34 @@ export interface CreateAgentInput {
   claudeMdBody: string
   args: AgentArg[]
   mcpRequirements: string[]
-  repos: RepoId[]
+  repos: RepoEntry[]
   allowedCommands: string[]
+}
+
+/**
+ * Derive folder names from repo URLs.
+ * If two repos share the same base name, prefix with org to disambiguate.
+ */
+function deriveRepoNames(repos: RepoEntry[]): RepoEntry[] {
+  // Parse org and repo name from each URL
+  const parsed = repos.map((r) => {
+    // Match patterns like github.com/org/repo.git or github.com:org/repo.git
+    const match = r.url.match(/[/:]([^/]+)\/([^/]+?)(?:\.git)?\s*$/)
+    const org = match ? match[1] : ''
+    const base = match ? match[2] : r.url.split('/').pop()?.replace(/\.git$/, '') || r.url
+    return { ...r, org, base }
+  })
+
+  // Find duplicate base names
+  const baseCounts = new Map<string, number>()
+  for (const p of parsed) {
+    baseCounts.set(p.base, (baseCounts.get(p.base) || 0) + 1)
+  }
+
+  return parsed.map((p) => ({
+    name: (baseCounts.get(p.base) || 0) > 1 && p.org ? `${p.org}-${p.base}` : p.base,
+    url: p.url
+  }))
 }
 
 function buildFrontmatter(input: CreateAgentInput): Record<string, unknown> {
@@ -596,7 +668,7 @@ async function buildClaudeMd(input: CreateAgentInput): Promise<string> {
   if (input.repos.length > 0) {
     reposSection = `\n## Repos\n\n`
     for (const repo of input.repos) {
-      reposSection += `- **${repo}:** \`./${repo}\`\n`
+      reposSection += `- **${repo.name}:** \`./${repo.name}\`\n`
     }
     reposSection += `\nThese repos are cloned in your working directory. Reference them using the relative paths above.\n\n`
   }
@@ -619,6 +691,9 @@ export async function createAgent(input: CreateAgentInput): Promise<AgentDefinit
   console.log('[agent-manager] createAgent called')
   await ensureDirs()
 
+  // Derive folder names from URLs
+  input.repos = deriveRepoNames(input.repos)
+
   const id = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   const agentDir = join(AGENTS_DIR, id)
   await mkdir(agentDir, { recursive: true })
@@ -634,6 +709,9 @@ export async function createAgent(input: CreateAgentInput): Promise<AgentDefinit
 }
 
 export async function updateAgent(agentId: string, input: CreateAgentInput): Promise<AgentDefinition> {
+  // Derive folder names from URLs
+  input.repos = deriveRepoNames(input.repos)
+
   const oldDir = join(AGENTS_DIR, agentId)
   const newId = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
@@ -667,6 +745,3 @@ export async function deleteAgent(agentId: string): Promise<void> {
   await rm(agentDir, { recursive: true, force: true })
 }
 
-export function getAvailableRepos(): Record<string, string> {
-  return { ...AVAILABLE_REPOS }
-}
