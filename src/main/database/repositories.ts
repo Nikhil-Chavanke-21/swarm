@@ -55,6 +55,7 @@ export interface CreateInstanceInput {
 export interface UpdateInstanceInput {
   tag?: string
   ready?: boolean
+  workingDir?: string
 }
 
 export interface CreateSessionInput {
@@ -258,6 +259,7 @@ export async function updateInstance(id: string, input: UpdateInstanceInput) {
 
   if (input.tag !== undefined) updateData.tag = input.tag
   if (input.ready !== undefined) updateData.ready = input.ready
+  if (input.workingDir !== undefined) updateData.working_dir = input.workingDir
 
   const { data, error } = await getDatabase()
     .from('agent_instances')

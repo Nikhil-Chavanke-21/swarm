@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
 import { initDatabase } from './database/supabase'
 import { ensureUser } from './database/repositories'
+import { migrateAgentFolders } from './agent-manager'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -41,6 +42,9 @@ app.whenReady().then(async () => {
   initDatabase(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!)
   await ensureUser().catch((err) =>
     console.warn('[swarm] ensureUser failed (tables may not exist yet):', err)
+  )
+  await migrateAgentFolders().catch((err) =>
+    console.warn('[swarm] migrateAgentFolders failed:', err)
   )
 
   app.on('browser-window-created', (_, window) => {

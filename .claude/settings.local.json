@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm run:*)",
       "Bash(pkill -f \"electron-vite\")",
-      "Bash(pkill -f \"electron .\")"
+      "Bash(pkill -f \"electron .\")",
+      "Bash(npx tsc *)"
     ]
   }
 }
