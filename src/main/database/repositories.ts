@@ -59,6 +59,7 @@ export interface UpdateInstanceInput {
 }
 
 export interface CreateSessionInput {
+  id?: string
   agentId: string
   agentName: string
   instanceId?: string
@@ -332,6 +333,7 @@ export async function createSession(input: CreateSessionInput) {
   const { data, error } = await getDatabase()
     .from('session_records')
     .insert({
+      ...(input.id ? { id: input.id } : {}),
       user_id: userId,
       agent_id: input.agentId,
       agent_name: input.agentName,

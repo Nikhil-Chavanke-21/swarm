@@ -3,17 +3,21 @@
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
   import { resumeSession } from '../stores/sessions'
+  import { updateLogTabClaudeId } from '../stores/logTabs'
   import type { SessionRecord } from '../types'
 
   let { record }: { record: SessionRecord } = $props()
 
   let resuming = $state(false)
+  let parsedClaudeSessionId = $state<string | null>(null)
+  const effectiveClaudeSessionId = $derived(record.claudeSessionId ?? parsedClaudeSessionId)
 
   async function handleResume() {
-    if (!record.claudeSessionId || resuming) return
+    const cid = effectiveClaudeSessionId
+    if (!cid || resuming) return
     resuming = true
     try {
-      await resumeSession(record.agentId, record.instanceId, record.claudeSessionId)
+      await resumeSession(record.agentId, record.instanceId, cid)
     } finally {
       resuming = false
     }
@@ -68,8 +72,12 @@
     const resizeObserver = new ResizeObserver(() => fitAddon.fit())
     resizeObserver.observe(containerEl)
 
-    const raw = await window.api.sessionsReadLog(record.id, record.logDir)
+    const { raw, claudeSessionId } = await window.api.sessionsReadLog(record.id, record.logDir)
     if (raw) terminal.write(raw)
+    if (claudeSessionId && !record.claudeSessionId) {
+      parsedClaudeSessionId = claudeSessionId
+      updateLogTabClaudeId(record.id, claudeSessionId)
+    }
 
     return () => resizeObserver.disconnect()
   })
@@ -91,7 +99,7 @@
         <span class="sep">·</span>
         <span class="duration">{formatDuration(record.durationMs)}</span>
       {/if}
-      {#if record.claudeSessionId}
+      {#if effectiveClaudeSessionId}
         <button class="resume-btn" onclick={handleResume} disabled={resuming}>
           {resuming ? 'Resuming…' : '↩ Resume'}
         </button>

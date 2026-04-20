@@ -1,14 +1,29 @@
 import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
+import { BrowserWindow } from 'electron'
 import {
   getSessions,
   getSessionsByAgent,
   createSession as repoCreateSession,
   updateSession,
+  getSession as repoGetSession,
   type CreateSessionInput
 } from './database/repositories'
 import { getDatabase } from './database/supabase'
 import { getUserId } from './database/user-store'
+
+const CLAUDE_RESUME_RE = /claude\s+--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+
+function extractClaudeSessionId(content: string): string | null {
+  const match = content.match(CLAUDE_RESUME_RE)
+  return match ? match[1] : null
+}
+
+function broadcastClaudeSessionId(sessionId: string, claudeSessionId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('session:claudeId', { sessionId, claudeSessionId })
+  }
+}
 
 export interface SessionRecord {
   id: string
@@ -48,6 +63,7 @@ export async function addSessionRecord(
   record: SessionRecord & { marketplaceAgentId?: string }
 ): Promise<void> {
   const input: CreateSessionInput = {
+    id: record.id,
     agentId: record.agentId,
     agentName: record.agentName,
     instanceId: record.instanceId,
@@ -70,13 +86,43 @@ export async function listSessionRecords(): Promise<SessionRecord[]> {
   return rows.map(dbRowToSessionRecord)
 }
 
-export async function readSessionLog(sessionId: string, logDir: string): Promise<string> {
+export interface SessionLogRead {
+  raw: string
+  claudeSessionId: string | null
+}
+
+export async function readSessionLog(sessionId: string, logDir: string): Promise<SessionLogRead> {
   const logPath = join(logDir, `${sessionId}.log`)
+  const txtPath = join(logDir, `${sessionId}.txt`)
+  let raw = ''
   try {
-    return await readFile(logPath, 'utf-8')
+    raw = await readFile(logPath, 'utf-8')
   } catch {
-    return ''
+    return { raw: '', claudeSessionId: null }
   }
+
+  // Prefer the ANSI-stripped .txt for robust regex matching; fall back to raw.
+  let textForParse = raw
+  try {
+    textForParse = await readFile(txtPath, 'utf-8')
+  } catch { /* fall back to raw */ }
+
+  const claudeSessionId = extractClaudeSessionId(textForParse) ?? extractClaudeSessionId(raw)
+
+  if (claudeSessionId) {
+    // Persist to DB if missing, then broadcast so any open SessionViewer updates.
+    try {
+      const row = await repoGetSession(sessionId)
+      if (!row.claude_session_id) {
+        await updateSession(sessionId, { claudeSessionId })
+        broadcastClaudeSessionId(sessionId, claudeSessionId)
+      }
+    } catch {
+      /* session row may not exist (legacy file, stale id) — skip persist */
+    }
+  }
+
+  return { raw, claudeSessionId }
 }
 
 function stripAnsiForSearch(str: string): string {

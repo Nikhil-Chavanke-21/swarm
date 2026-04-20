@@ -4,7 +4,11 @@
       "Bash(npm run:*)",
       "Bash(pkill -f \"electron-vite\")",
       "Bash(pkill -f \"electron .\")",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(python3 -c \"import pptx; print\\('ok'\\)\")",
+      "Bash(pip3 install *)",
+      "Bash(python3 *)",
+      "Bash(npx svelte-check *)"
     ]
   }
 }

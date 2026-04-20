@@ -145,9 +145,6 @@ export function spawnPty(
     onExitCallback?.(exitCode)
   })
 
-  // Type `claude` after shell starts (1.5s), then type args after Claude starts (8s)
-  // Fixed timeouts are more reliable than prompt detection since both zsh and Claude
-  // use ANSI escape codes that make regex matching fragile.
   const fullCommand = [command, ...args].join(' ')
 
   console.log(`[pty] scheduling command: ${fullCommand}`)
@@ -161,9 +158,9 @@ export function spawnPty(
       setTimeout(() => {
         console.log('[pty] typing initial message into claude')
         proc.write(initialMessage + '\r')
-      }, 7000)
+      }, 3500)
     }
-  }, 1500)
+  }, 800)
 }
 
 export function writeToPty(instanceId: string, data: string): void {

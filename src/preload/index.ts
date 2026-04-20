@@ -85,7 +85,7 @@ const api = {
   sessionsList: () => ipcRenderer.invoke('sessions:list'),
   sessionsSearch: (query: string, agentId?: string) =>
     ipcRenderer.invoke('sessions:search', query, agentId),
-  sessionsReadLog: (sessionId: string, logDir: string) =>
+  sessionsReadLog: (sessionId: string, logDir: string): Promise<{ raw: string; claudeSessionId: string | null }> =>
     ipcRenderer.invoke('sessions:readLog', sessionId, logDir),
 
   // Marketplace
