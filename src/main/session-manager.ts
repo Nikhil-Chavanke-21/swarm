@@ -7,6 +7,8 @@ import {
   updateSession,
   type CreateSessionInput
 } from './database/repositories'
+import { getDatabase } from './database/supabase'
+import { getUserId } from './database/user-store'
 
 export interface SessionRecord {
   id: string
@@ -130,12 +132,60 @@ export async function searchSessions(query: string, agentId?: string): Promise<S
   const rows = agentId ? await getSessionsByAgent(agentId) : await getSessions(500)
   const records = rows.map(dbRowToSessionRecord)
 
-  if (!query.trim()) return records
+  const q = query.trim().toLowerCase()
+  if (!q) return records
 
   const results: SessionRecord[] = []
   for (const record of records) {
-    const matches = await searchSessionText(record.id, record.logDir, query)
-    if (matches) results.push(record)
+    const metaHit =
+      record.agentName?.toLowerCase().includes(q) ||
+      record.instanceTag?.toLowerCase().includes(q) ||
+      record.prompt?.toLowerCase().includes(q)
+    if (metaHit || (await searchSessionText(record.id, record.logDir, q))) {
+      results.push(record)
+    }
   }
   return results
+}
+
+/**
+ * Repairs stale session_records.log_dir values by recomputing from each session's
+ * current instance.working_dir. Called on startup so paths stay correct after any
+ * folder rename / migration. If agentId is given, only that agent's sessions are
+ * touched — useful inside updateAgent's rename branch.
+ */
+export async function repairSessionLogDirs(agentId?: string): Promise<void> {
+  const userId = getUserId()
+  const db = getDatabase()
+
+  let instancesQuery = db.from('agent_instances').select('id, working_dir').eq('user_id', userId)
+  if (agentId) instancesQuery = instancesQuery.eq('agent_id', agentId)
+  const { data: instances, error: ie } = await instancesQuery
+  if (ie) throw ie
+  const workingDirById = new Map<string, string>(
+    ((instances || []) as Array<{ id: string; working_dir: string }>).map((i) => [i.id, i.working_dir])
+  )
+
+  let sessionsQuery = db
+    .from('session_records')
+    .select('id, log_dir, instance_id')
+    .eq('user_id', userId)
+    .not('instance_id', 'is', null)
+  if (agentId) sessionsQuery = sessionsQuery.eq('agent_id', agentId)
+  const { data: sessions, error: se } = await sessionsQuery
+  if (se) throw se
+
+  for (const row of ((sessions || []) as Array<{ id: string; log_dir: string; instance_id: string }>)) {
+    const wd = workingDirById.get(row.instance_id)
+    if (!wd) continue
+    const expected = join(wd, 'sessions')
+    if (row.log_dir !== expected) {
+      const { error: ue } = await db
+        .from('session_records')
+        .update({ log_dir: expected })
+        .eq('id', row.id)
+        .eq('user_id', userId)
+      if (ue) console.error('[repair] update log_dir failed:', ue)
+    }
+  }
 }

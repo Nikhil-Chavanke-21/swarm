@@ -5,6 +5,7 @@ import { registerIpcHandlers } from './ipc'
 import { initDatabase } from './database/supabase'
 import { ensureUser } from './database/repositories'
 import { migrateAgentFolders } from './agent-manager'
+import { repairSessionLogDirs } from './session-manager'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -45,6 +46,9 @@ app.whenReady().then(async () => {
   )
   await migrateAgentFolders().catch((err) =>
     console.warn('[swarm] migrateAgentFolders failed:', err)
+  )
+  await repairSessionLogDirs().catch((err) =>
+    console.warn('[swarm] repairSessionLogDirs failed:', err)
   )
 
   app.on('browser-window-created', (_, window) => {

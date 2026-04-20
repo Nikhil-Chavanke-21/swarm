@@ -6,7 +6,7 @@ import { stringify as stringifyYaml } from 'yaml'
 import { spawn } from 'child_process'
 import { BrowserWindow } from 'electron'
 import { spawnPty } from './pty-manager'
-import { addSessionRecord, closeSessionRecord, updateSessionClaudeId } from './session-manager'
+import { addSessionRecord, closeSessionRecord, updateSessionClaudeId, repairSessionLogDirs } from './session-manager'
 import { deleteAllCrons, reinstallCrons } from './cron-manager'
 import {
   getAgents as repoGetAgents,
@@ -897,12 +897,18 @@ export async function updateAgent(agentId: string, input: CreateAgentInput): Pro
     await materializeInstanceFiles(newWd, claudeMdContent, input.allowedCommands)
   }
 
-  // Cron plists bake the instance dir into the plist XML — regenerate on rename
+  // Cron plists bake the instance dir into the plist XML — regenerate on rename.
+  // Session rows store log_dir absolutely too, so repair those before old paths rot.
   if (isRename) {
     try {
       await reinstallCrons(agentId)
     } catch (err) {
       console.error('[agent-manager] reinstallCrons failed after rename:', err)
+    }
+    try {
+      await repairSessionLogDirs(agentId)
+    } catch (err) {
+      console.error('[agent-manager] repairSessionLogDirs failed after rename:', err)
     }
   }
 
