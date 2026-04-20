@@ -111,7 +111,9 @@ const api = {
   cronUpdate: (agentId: string, cronId: string, updates: Record<string, unknown>) =>
     ipcRenderer.invoke('cron:update', agentId, cronId, updates),
   cronDelete: (agentId: string, cronId: string) =>
-    ipcRenderer.invoke('cron:delete', agentId, cronId)
+    ipcRenderer.invoke('cron:delete', agentId, cronId),
+  cronTest: (agentId: string, schedule: Record<string, number | undefined>, args: Record<string, string>) =>
+    ipcRenderer.invoke('cron:test', agentId, schedule, args) as Promise<{ testSessionId: string; workingDir: string }>
 }
 
 contextBridge.exposeInMainWorld('api', api)

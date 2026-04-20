@@ -25,6 +25,7 @@ import {
   addCron,
   updateCron,
   deleteCron,
+  testCron,
   type CronSchedule
 } from './cron-manager'
 
@@ -117,5 +118,8 @@ export function registerIpcHandlers(): void {
   )
   ipcMain.handle('cron:delete', (_event, agentId: string, cronId: string) =>
     deleteCron(agentId, cronId)
+  )
+  ipcMain.handle('cron:test', (_event, agentId: string, schedule: CronSchedule, args: Record<string, string>) =>
+    testCron(agentId, schedule, args)
   )
 }

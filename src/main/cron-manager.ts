@@ -2,6 +2,8 @@ import { mkdir, writeFile, unlink } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
+import { v4 as uuid } from 'uuid'
+import { spawnPty } from './pty-manager'
 import {
   getCrons as repoGetCrons,
   createCron as repoCreateCron,
@@ -150,10 +152,34 @@ function loadPlist(label: string): void {
   }
 }
 
-function unloadPlist(label: string): void {
+function isPlistLoaded(label: string): boolean {
   try {
-    execSync(`launchctl bootout gui/$(id -u) ${label}`, { stdio: 'ignore' })
-  } catch { /* ignore */ }
+    const out = execSync(`launchctl list | grep -F ${label} || true`, { encoding: 'utf-8' })
+    return out.trim().length > 0
+  } catch {
+    return false
+  }
+}
+
+function unloadPlist(label: string): void {
+  // bootout can fail with "Operation in progress" if a fire is executing.
+  // Retry a few times and verify the job actually left launchctl's memory.
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      execSync(`launchctl bootout gui/$(id -u)/${label}`, { stdio: ['ignore', 'ignore', 'pipe'] })
+    } catch (err) {
+      const stderr = (err as { stderr?: Buffer }).stderr?.toString() || ''
+      if (!isPlistLoaded(label)) return  // already gone
+      if (attempt === 5) {
+        console.error(`[cron-manager] unloadPlist ${label} failed after ${attempt} attempts:`, stderr.trim())
+        return
+      }
+      execSync('sleep 0.5')
+      continue
+    }
+    if (!isPlistLoaded(label)) return
+  }
+  console.error(`[cron-manager] unloadPlist ${label} still loaded after retries`)
 }
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -235,6 +261,33 @@ async function installPlist(agentId: string, cron: CronDefinition): Promise<void
   await mkdir(LAUNCH_AGENTS_DIR, { recursive: true })
   await writeFile(plistPath(agentId, cron.id), plistContent, 'utf-8')
   loadPlist(label)
+}
+
+function bashAnsiQuote(s: string): string {
+  const escaped = s
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+  return `$'${escaped}'`
+}
+
+export async function testCron(
+  agentId: string,
+  schedule: CronSchedule,
+  args: Record<string, string>
+): Promise<{ testSessionId: string; workingDir: string }> {
+  const instanceDir = await getFirstInstanceDir(agentId)
+  if (!instanceDir) throw new Error(`No ready instance for agent ${agentId}`)
+
+  const prompt = buildPrompt(schedule, args)
+  const testSessionId = `cron-test-${uuid()}`
+  const logDir = join(instanceDir, 'sessions')
+
+  spawnPty(testSessionId, instanceDir, 'claude', ['-p', bashAnsiQuote(prompt)], undefined, logDir)
+
+  return { testSessionId, workingDir: instanceDir }
 }
 
 export async function reinstallCrons(agentId: string): Promise<void> {
