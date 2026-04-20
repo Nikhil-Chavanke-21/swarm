@@ -52,9 +52,11 @@ function plistPath(agentId: string, cronId: string): string {
   return join(LAUNCH_AGENTS_DIR, `${plistLabel(agentId, cronId)}.plist`)
 }
 
-function buildPrompt(args: Record<string, string>): string {
-  if (Object.keys(args).length === 0) return ''
-  return Object.entries(args).map(([k, v]) => `${k}: ${v}`).join(' | ')
+function buildPrompt(schedule: CronSchedule, args: Record<string, string>): string {
+  const cadence = formatSchedule(schedule)
+  const preamble = `You are being invoked automatically as a scheduled job (cadence: ${cadence}). There is no interactive user watching. Complete the task below autonomously, and exit, don't ask questions.`
+  const argsText = Object.entries(args).map(([k, v]) => `${k}: ${v}`).join(' | ')
+  return argsText ? `${preamble}\n\n${argsText}` : preamble
 }
 
 async function getFirstInstanceDir(agentId: string): Promise<string | null> {
@@ -86,9 +88,7 @@ function buildPlist(
   const sessionId = `cron-${cronId}-$(date +%s)`
   const logFile = join(logDir, `cron-${cronId}.log`)
 
-  const script = prompt
-    ? `if [ -f "${lockFile}" ]; then echo "Skipping — session already running" >> "${logFile}"; exit 0; fi; mkdir -p "${logDir}" && touch "${lockFile}" && cd "${instanceDir}" && claude -p "${prompt.replace(/"/g, '\\"')}" >> "${logFile}" 2>&1; rm -f "${lockFile}"`
-    : `if [ -f "${lockFile}" ]; then echo "Skipping — session already running" >> "${logFile}"; exit 0; fi; mkdir -p "${logDir}" && touch "${lockFile}" && cd "${instanceDir}" && claude -p "Run your default workflow." >> "${logFile}" 2>&1; rm -f "${lockFile}"`
+  const script = `if [ -f "${lockFile}" ]; then echo "Skipping — session already running" >> "${logFile}"; exit 0; fi; mkdir -p "${logDir}" && touch "${lockFile}" && cd "${instanceDir}" && claude -p "${prompt.replace(/"/g, '\\"')}" >> "${logFile}" 2>&1; rm -f "${lockFile}"`
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -229,7 +229,7 @@ async function installPlist(agentId: string, cron: CronDefinition): Promise<void
   }
 
   const label = plistLabel(agentId, cron.id)
-  const prompt = buildPrompt(cron.args)
+  const prompt = buildPrompt(cron.schedule, cron.args)
   const plistContent = buildPlist(label, agentId, instanceDir, prompt, cron.schedule, cron.id)
 
   await mkdir(LAUNCH_AGENTS_DIR, { recursive: true })

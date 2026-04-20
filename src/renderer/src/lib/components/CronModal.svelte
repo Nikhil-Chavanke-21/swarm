@@ -184,11 +184,21 @@
           </div>
           <div class="field narrow">
             <label>Hour</label>
-            <input type="number" bind:value={newHour} placeholder="*" min="0" max="23" />
+            <select bind:value={newHour}>
+              <option value="">Every hour</option>
+              {#each Array(24) as _, h}
+                <option value={String(h)}>{h}</option>
+              {/each}
+            </select>
           </div>
           <div class="field narrow">
             <label>Minute</label>
-            <input type="number" bind:value={newMinute} placeholder="0" min="0" max="59" />
+            <select bind:value={newMinute}>
+              <option value="">Every minute</option>
+              {#each Array(60) as _, m}
+                <option value={String(m)}>{m}</option>
+              {/each}
+            </select>
           </div>
         </div>
 
@@ -215,12 +225,12 @@
                     {/each}
                   </select>
                 {:else}
-                  <input
-                    type="text"
+                  <textarea
                     value={newArgs[arg.name] ?? arg.default ?? ''}
                     oninput={(e) => { newArgs[arg.name] = e.currentTarget.value }}
                     placeholder={arg.description}
-                  />
+                    rows="3"
+                  ></textarea>
                 {/if}
               </div>
             {/each}
@@ -467,7 +477,7 @@
 
   .arg-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     margin-bottom: 6px;
   }
@@ -477,9 +487,10 @@
     color: #a6adc8;
     width: 100px;
     flex-shrink: 0;
+    padding-top: 6px;
   }
 
-  .arg-row input, .arg-row select {
+  .arg-row input, .arg-row select, .arg-row textarea {
     flex: 1;
     background: #11111b;
     border: 1px solid #313244;
@@ -490,7 +501,13 @@
     outline: none;
   }
 
-  .arg-row input:focus, .arg-row select:focus {
+  .arg-row textarea {
+    font-family: inherit;
+    resize: vertical;
+    min-height: 48px;
+  }
+
+  .arg-row input:focus, .arg-row select:focus, .arg-row textarea:focus {
     border-color: #89b4fa;
   }
 

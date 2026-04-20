@@ -171,12 +171,12 @@
                   {/each}
                 </div>
               {:else}
-                <input
+                <textarea
                   id={arg.name}
-                  type="text"
                   bind:value={argValues[arg.name]}
                   placeholder={arg.default || ''}
-                />
+                  rows="3"
+                ></textarea>
               {/if}
             </div>
           {/each}
@@ -344,7 +344,8 @@
     margin: 0 0 6px;
   }
 
-  .arg-field input {
+  .arg-field input,
+  .arg-field textarea {
     width: 100%;
     background: #11111b;
     border: 1px solid #313244;
@@ -356,7 +357,14 @@
     box-sizing: border-box;
   }
 
-  .arg-field input:focus {
+  .arg-field textarea {
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+  }
+
+  .arg-field input:focus,
+  .arg-field textarea:focus {
     border-color: #89b4fa;
   }
 
