@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AgentDefinition, CronDefinition, CronSchedule, AgentArg } from '../types'
   import { onMount } from 'svelte'
+  import Terminal from './Terminal.svelte'
 
   let {
     agent,
@@ -20,6 +21,13 @@
   let newWeekday = $state<string>('')  // empty = every day
   let newArgs = $state<Record<string, string>>({})
   let adding = $state(false)
+  let testing = $state(false)
+  let testSessionId = $state<string | null>(null)
+  let editingCronId = $state<string | null>(null)
+
+  const canTestOrAdd = $derived(
+    agent.args.filter((a) => a.required).every((a) => (newArgs[a.name] ?? a.default ?? '').trim())
+  )
 
   const WEEKDAYS = [
     { value: '', label: 'Every day' },
@@ -46,11 +54,7 @@
   $effect(() => {
     if (visible && agent) {
       loadCrons()
-      // Initialize arg defaults
-      newArgs = {}
-      for (const arg of agent.args) {
-        if (arg.default) newArgs[arg.name] = arg.default
-      }
+      resetForm()
     }
   })
 
@@ -82,6 +86,18 @@
     return entries.map(([k, v]) => `${k}: ${v}`).join(', ')
   }
 
+  function resetForm() {
+    newLabel = ''
+    newHour = ''
+    newMinute = '0'
+    newWeekday = ''
+    newArgs = {}
+    for (const arg of agent.args) {
+      if (arg.default) newArgs[arg.name] = arg.default
+    }
+    editingCronId = null
+  }
+
   async function handleAdd() {
     if (!newLabel.trim()) return
     adding = true
@@ -91,20 +107,66 @@
       for (const [k, v] of Object.entries(newArgs)) {
         if (v.trim()) filteredArgs[k] = v.trim()
       }
-      await window.api.cronAdd(agent.id, newLabel.trim(), schedule, filteredArgs)
-      newLabel = ''
-      newHour = ''
-      newMinute = '0'
-      newWeekday = ''
-      newArgs = {}
-      for (const arg of agent.args) {
-        if (arg.default) newArgs[arg.name] = arg.default
+      if (editingCronId) {
+        await window.api.cronUpdate(agent.id, editingCronId, {
+          label: newLabel.trim(),
+          schedule,
+          args: filteredArgs
+        })
+      } else {
+        await window.api.cronAdd(agent.id, newLabel.trim(), schedule, filteredArgs)
       }
+      resetForm()
       await loadCrons()
     } catch (err) {
-      console.error('Failed to add cron:', err)
+      console.error('Failed to save cron:', err)
     }
     adding = false
+  }
+
+  function handleEdit(cron: CronDefinition) {
+    editingCronId = cron.id
+    newLabel = cron.label
+    newHour = cron.schedule.hour !== undefined ? String(cron.schedule.hour) : ''
+    newMinute = cron.schedule.minute !== undefined ? String(cron.schedule.minute) : ''
+    newWeekday = cron.schedule.weekday !== undefined ? String(cron.schedule.weekday) : ''
+    newArgs = {}
+    for (const arg of agent.args) {
+      newArgs[arg.name] = cron.args[arg.name] ?? arg.default ?? ''
+    }
+  }
+
+  function handleCancelEdit() {
+    resetForm()
+  }
+
+  async function handleTest() {
+    if (!canTestOrAdd || testing) return
+    // Stop any previous test first
+    if (testSessionId) {
+      await window.api.ptyKill(testSessionId)
+      testSessionId = null
+    }
+    testing = true
+    try {
+      const schedule = buildSchedule()
+      const filteredArgs: Record<string, string> = {}
+      for (const arg of agent.args) {
+        const v = (newArgs[arg.name] ?? arg.default ?? '').trim()
+        if (v) filteredArgs[arg.name] = v
+      }
+      const { testSessionId: id } = await window.api.cronTest(agent.id, schedule, filteredArgs)
+      testSessionId = id
+    } catch (err) {
+      console.error('Failed to start test:', err)
+    }
+    testing = false
+  }
+
+  async function handleStopTest() {
+    if (!testSessionId) return
+    await window.api.ptyKill(testSessionId)
+    testSessionId = null
   }
 
   async function handleToggle(cron: CronDefinition) {
@@ -118,6 +180,10 @@
   }
 
   function close() {
+    if (testSessionId) {
+      window.api.ptyKill(testSessionId)
+      testSessionId = null
+    }
     visible = false
   }
 
@@ -144,7 +210,7 @@
           <div class="empty">No scheduled jobs yet.</div>
         {:else}
           {#each crons as cron (cron.id)}
-            <div class="cron-card" class:disabled={!cron.enabled}>
+            <div class="cron-card" class:disabled={!cron.enabled} class:editing={editingCronId === cron.id}>
               <div class="cron-row">
                 <button
                   class="toggle-btn"
@@ -157,6 +223,7 @@
                   <span class="cron-schedule">{formatSchedule(cron.schedule)}</span>
                 </div>
                 <span class="cron-args">{formatArgs(cron.args)}</span>
+                <button class="edit-btn" onclick={() => handleEdit(cron)} title="Edit">✎</button>
                 <button class="del-btn" onclick={() => handleDelete(cron.id)} title="Delete">x</button>
               </div>
             </div>
@@ -164,9 +231,9 @@
         {/if}
       </div>
 
-      <!-- Add new cron -->
+      <!-- Add / edit cron -->
       <div class="add-section">
-        <h3>Add Scheduled Job</h3>
+        <h3>{editingCronId ? 'Edit Scheduled Job' : 'Add Scheduled Job'}</h3>
 
         <div class="field">
           <label>Label</label>
@@ -237,9 +304,42 @@
           </div>
         {/if}
 
-        <button class="add-btn" onclick={handleAdd} disabled={adding || !newLabel.trim()}>
-          {adding ? 'Adding...' : '+ Add Job'}
-        </button>
+        <div class="action-row">
+          {#if editingCronId}
+            <button class="cancel-btn" onclick={handleCancelEdit} disabled={adding}>
+              Cancel
+            </button>
+          {/if}
+          <button
+            class="test-btn"
+            onclick={handleTest}
+            disabled={testing || !canTestOrAdd}
+            title={!canTestOrAdd ? 'Fill required arguments first' : 'Run this job once now to test output & permissions'}
+          >
+            {testing ? 'Starting...' : '▶ Test'}
+          </button>
+          <button
+            class="add-btn"
+            onclick={handleAdd}
+            disabled={adding || !newLabel.trim() || !canTestOrAdd}
+          >
+            {adding ? (editingCronId ? 'Saving...' : 'Adding...') : (editingCronId ? 'Save changes' : '+ Add Job')}
+          </button>
+        </div>
+
+        {#if testSessionId}
+          <div class="test-panel">
+            <div class="test-panel-header">
+              <span>Test run (interactive — same prompt your cron would send)</span>
+              <button class="stop-test-btn" onclick={handleStopTest}>Stop test</button>
+            </div>
+            <div class="test-terminal">
+              {#key testSessionId}
+                <Terminal instanceId={testSessionId} />
+              {/key}
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div class="modal-footer">
@@ -382,7 +482,7 @@
     white-space: nowrap;
   }
 
-  .del-btn {
+  .del-btn, .edit-btn {
     background: none;
     border: none;
     color: #585b70;
@@ -396,6 +496,16 @@
   .del-btn:hover {
     color: #f38ba8;
     background: #313244;
+  }
+
+  .edit-btn:hover {
+    color: #89b4fa;
+    background: #313244;
+  }
+
+  .cron-card.editing {
+    border-color: #89b4fa;
+    background: color-mix(in srgb, #89b4fa 8%, #181825);
   }
 
   .add-section {
@@ -511,8 +621,13 @@
     border-color: #89b4fa;
   }
 
+  .action-row {
+    display: flex;
+    gap: 8px;
+  }
+
   .add-btn {
-    width: 100%;
+    flex: 1;
     padding: 8px;
     border-radius: 8px;
     border: 1px dashed #45475a;
@@ -530,6 +645,86 @@
   .add-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .test-btn {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid #45475a;
+    background: transparent;
+    color: #89b4fa;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .test-btn:hover:not(:disabled) {
+    background: #181825;
+    border-color: #89b4fa;
+  }
+
+  .test-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .cancel-btn {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid #45475a;
+    background: transparent;
+    color: #a6adc8;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .cancel-btn:hover:not(:disabled) {
+    background: #181825;
+    border-color: #a6adc8;
+  }
+
+  .cancel-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .test-panel {
+    margin-top: 12px;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #11111b;
+  }
+
+  .test-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: #181825;
+    border-bottom: 1px solid #313244;
+    font-size: 11px;
+    color: #a6adc8;
+  }
+
+  .stop-test-btn {
+    background: none;
+    border: 1px solid #45475a;
+    color: #f38ba8;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .stop-test-btn:hover {
+    border-color: #f38ba8;
+    background: #181825;
+  }
+
+  .test-terminal {
+    height: 280px;
   }
 
   .modal-footer {
