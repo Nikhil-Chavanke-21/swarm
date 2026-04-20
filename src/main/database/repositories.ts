@@ -28,6 +28,7 @@ export interface CreateAgentInput {
   mcpRequirements?: string[]
   allowedCommands?: string[]
   repos?: RepoEntry[]
+  marketplaceAgentId?: string
 }
 
 export interface UpdateAgentInput {
@@ -40,6 +41,7 @@ export interface UpdateAgentInput {
   mcpRequirements?: string[]
   allowedCommands?: string[]
   repos?: RepoEntry[]
+  marketplaceAgentId?: string | null
 }
 
 export interface CreateInstanceInput {
@@ -64,6 +66,7 @@ export interface CreateSessionInput {
   prompt?: string
   logDir?: string
   claudeSessionId?: string
+  marketplaceAgentId?: string
 }
 
 export interface UpdateSessionInput {
@@ -152,7 +155,8 @@ export async function createAgent(input: CreateAgentInput) {
       args: input.args || [],
       mcp_requirements: input.mcpRequirements || [],
       allowed_commands: input.allowedCommands || [],
-      repos: input.repos || []
+      repos: input.repos || [],
+      marketplace_agent_id: input.marketplaceAgentId ?? null
     })
     .select()
     .single()
@@ -174,6 +178,7 @@ export async function updateAgent(id: string, input: UpdateAgentInput) {
   if (input.mcpRequirements !== undefined) updateData.mcp_requirements = input.mcpRequirements
   if (input.allowedCommands !== undefined) updateData.allowed_commands = input.allowedCommands
   if (input.repos !== undefined) updateData.repos = input.repos
+  if (input.marketplaceAgentId !== undefined) updateData.marketplace_agent_id = input.marketplaceAgentId
 
   const { data, error } = await getDatabase()
     .from('agents')
@@ -333,7 +338,8 @@ export async function createSession(input: CreateSessionInput) {
       instance_tag: input.instanceTag,
       prompt: input.prompt,
       log_dir: input.logDir,
-      claude_session_id: input.claudeSessionId
+      claude_session_id: input.claudeSessionId,
+      marketplace_agent_id: input.marketplaceAgentId ?? null
     })
     .select()
     .single()

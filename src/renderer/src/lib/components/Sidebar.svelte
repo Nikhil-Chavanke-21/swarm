@@ -1,25 +1,27 @@
 <script lang="ts">
   import { agents, loadAgents } from '../stores/agents'
-  import { sidebarCollapsed, showCreateAgentModal } from '../stores/ui'
+  import { sidebarCollapsed, showCreateAgentModal, sidebarTab } from '../stores/ui'
+  import { loadMarketplace } from '../stores/marketplace'
   import AgentCard from './AgentCard.svelte'
   import SessionList from './SessionList.svelte'
+  import MarketplaceView from './MarketplaceView.svelte'
   import { onMount } from 'svelte'
-
-  let tab = $state<'agents' | 'sessions'>('agents')
 
   onMount(() => {
     loadAgents()
+    loadMarketplace()
   })
 </script>
 
 <aside class="sidebar" class:collapsed={$sidebarCollapsed}>
   <div class="sidebar-header">
     <div class="tabs">
-      <button class="tab-btn" class:active={tab === 'agents'} onclick={() => tab = 'agents'}>Agents</button>
-      <button class="tab-btn" class:active={tab === 'sessions'} onclick={() => tab = 'sessions'}>Sessions</button>
+      <button class="tab-btn" class:active={$sidebarTab === 'agents'} onclick={() => sidebarTab.set('agents')}>Agents</button>
+      <button class="tab-btn" class:active={$sidebarTab === 'sessions'} onclick={() => sidebarTab.set('sessions')}>Sessions</button>
+      <button class="tab-btn" class:active={$sidebarTab === 'marketplace'} onclick={() => sidebarTab.set('marketplace')}>Market</button>
     </div>
     <div class="header-actions">
-      {#if tab === 'agents' && !$sidebarCollapsed}
+      {#if $sidebarTab === 'agents' && !$sidebarCollapsed}
         <button class="create-btn" onclick={() => showCreateAgentModal.set(true)} title="Create agent">+</button>
       {/if}
       <button
@@ -31,7 +33,7 @@
   </div>
 
   {#if !$sidebarCollapsed}
-    {#if tab === 'agents'}
+    {#if $sidebarTab === 'agents'}
       <div class="agent-list">
         {#if $agents.length === 0}
           <div class="empty">
@@ -46,8 +48,10 @@
           {/each}
         {/if}
       </div>
-    {:else}
+    {:else if $sidebarTab === 'sessions'}
       <SessionList />
+    {:else}
+      <MarketplaceView />
     {/if}
   {/if}
 </aside>

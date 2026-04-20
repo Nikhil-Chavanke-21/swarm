@@ -38,6 +38,7 @@ export interface AgentDefinition {
   repos: RepoEntry[]
   workingDir: string
   instances: AgentInstance[]
+  marketplaceAgentId?: string
 }
 
 export type InstanceStatus = 'idle' | 'thinking' | 'waiting' | 'error'
@@ -69,6 +70,7 @@ export interface SessionRecord {
   prompt: string
   logDir: string
   claudeSessionId?: string
+  marketplaceAgentId?: string
 }
 
 export type McpStatus = 'connected' | 'needs-auth' | 'never-connected'

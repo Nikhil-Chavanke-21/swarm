@@ -72,6 +72,7 @@ export interface AgentDefinition {
   repos: RepoEntry[]
   workingDir: string
   instances: AgentInstance[]
+  marketplaceAgentId?: string
 }
 
 const SWARM_DIR = join(homedir(), '.swarm')
@@ -128,6 +129,56 @@ async function ensureBaseDirs(): Promise<void> {
   }
 }
 
+/**
+ * Write CLAUDE.md + (optionally) settings.local.json INTO an instance's
+ * working directory. Claude Code v2 does not reliably walk parent directories
+ * for CLAUDE.md, so we materialize the agent definition directly in the cwd
+ * where claude is spawned.
+ */
+async function materializeInstanceFiles(
+  workingDir: string,
+  claudeMdContent: string,
+  allowedCommands: string[]
+): Promise<void> {
+  await mkdir(workingDir, { recursive: true })
+  // Prepend base rules so each session sees them too (Claude Code won't walk
+  // up to ~/.swarm/CLAUDE.md on its own).
+  let baseRules = DEFAULT_BASE_CLAUDE_MD
+  try {
+    baseRules = await readFile(BASE_CLAUDE_MD_PATH, 'utf-8')
+  } catch { /* fall back to default */ }
+  const combined = `${baseRules.trimEnd()}\n\n${claudeMdContent}`
+  await writeFile(join(workingDir, 'CLAUDE.md'), combined, 'utf-8')
+  if (allowedCommands.length > 0) {
+    await writeSettings(workingDir, allowedCommands)
+  }
+}
+
+/**
+ * Write CLAUDE.md and settings at the agent-level dir AND propagate to every
+ * existing instance directory. Used by the marketplace edit path so wiki
+ * updates reach already-created instances.
+ */
+export async function syncAgentDiskFiles(
+  agentId: string,
+  claudeMdContent: string,
+  allowedCommands: string[]
+): Promise<void> {
+  const agentDir = join(AGENTS_DIR, agentId)
+  await mkdir(agentDir, { recursive: true })
+  await writeFile(join(agentDir, 'CLAUDE.md'), claudeMdContent, 'utf-8')
+  await writeSettings(agentDir, allowedCommands)
+
+  const instanceRows = await repoGetInstances(agentId)
+  for (const inst of instanceRows) {
+    await materializeInstanceFiles(
+      inst.working_dir as string,
+      claudeMdContent,
+      allowedCommands
+    )
+  }
+}
+
 // ─── DB row → app type mappers ──────────────────────────────────────────────
 
 function dbRowToAgentDefinition(
@@ -155,7 +206,8 @@ function dbRowToAgentDefinition(
     mcpRequirements: (row.mcp_requirements as string[]) || [],
     repos: (row.repos as RepoEntry[]) || [],
     workingDir: agentDir,
-    instances
+    instances,
+    marketplaceAgentId: (row.marketplace_agent_id as string | null) ?? undefined
   }
 }
 
@@ -270,9 +322,7 @@ export async function createInstance(agentId: string): Promise<AgentInstance> {
   const workingDir = join(agentDir, 'instances', String(index))
   await mkdir(workingDir, { recursive: true })
 
-  if (agent.allowedCommands.length > 0) {
-    await writeSettings(workingDir, agent.allowedCommands)
-  }
+  await materializeInstanceFiles(workingDir, agent.claudeMdContent, agent.allowedCommands)
 
   const ready = agent.repos.length === 0
   const dbRow = await repoCreateInstance({
@@ -370,6 +420,11 @@ export async function spawnAgent(
   if (!instance) throw new Error(`Instance not found: ${instanceId}`)
   if (!instance.ready) throw new Error(`Instance ${instanceId} is not ready yet`)
 
+  // Defensive: ensure CLAUDE.md (and settings) exist in the instance cwd
+  // before Claude Code launches. Fixes any legacy instances created before
+  // materializeInstanceFiles existed.
+  await materializeInstanceFiles(instance.workingDir, agent.claudeMdContent, agent.allowedCommands)
+
   const sessionId = uuid()
   const startedAt = new Date().toISOString()
 
@@ -403,7 +458,8 @@ export async function spawnAgent(
     instanceTag: instance.tag,
     startedAt,
     prompt,
-    logDir
+    logDir,
+    marketplaceAgentId: agent.marketplaceAgentId
   })
 
   const lockFile = join(logDir, '.lock')
@@ -429,6 +485,8 @@ export async function resumeAgent(
   const instance = agent.instances.find((i) => i.id === instanceId)
   if (!instance) throw new Error(`Instance not found: ${instanceId}`)
   if (!instance.ready) throw new Error(`Instance ${instanceId} is not ready yet`)
+
+  await materializeInstanceFiles(instance.workingDir, agent.claudeMdContent, agent.allowedCommands)
 
   const sessionId = uuid()
   const startedAt = new Date().toISOString()
@@ -458,7 +516,8 @@ export async function resumeAgent(
     instanceTag: instance.tag,
     startedAt,
     prompt: `Resume ${claudeSessionId}`,
-    logDir
+    logDir,
+    marketplaceAgentId: agent.marketplaceAgentId
   })
 
   const lockFile = join(logDir, '.lock')
@@ -519,6 +578,7 @@ export interface CreateAgentInput {
   mcpRequirements: string[]
   repos: RepoEntry[]
   allowedCommands: string[]
+  marketplaceAgentId?: string
 }
 
 /**
@@ -604,7 +664,8 @@ export async function createAgent(input: CreateAgentInput): Promise<AgentDefinit
     args: input.args,
     mcpRequirements: input.mcpRequirements,
     allowedCommands: input.allowedCommands,
-    repos: input.repos
+    repos: input.repos,
+    marketplaceAgentId: input.marketplaceAgentId
   })
 
   const agentId = dbRow.id as string
@@ -646,12 +707,15 @@ export async function updateAgent(agentId: string, input: CreateAgentInput): Pro
   await writeFile(join(agentDir, 'CLAUDE.md'), claudeMdContent, 'utf-8')
   await writeSettings(agentDir, input.allowedCommands)
 
-  // Propagate updated permissions to all existing instance folders
-  if (input.allowedCommands.length > 0) {
-    const instanceRows = await repoGetInstances(agentId)
-    for (const inst of instanceRows) {
-      await writeSettings(inst.working_dir as string, input.allowedCommands)
-    }
+  // Propagate updated CLAUDE.md + permissions to every existing instance
+  // working directory so already-created instances pick up the new definition.
+  const instanceRows = await repoGetInstances(agentId)
+  for (const inst of instanceRows) {
+    await materializeInstanceFiles(
+      inst.working_dir as string,
+      claudeMdContent,
+      input.allowedCommands
+    )
   }
 
   return (await getAgent(agentId))!

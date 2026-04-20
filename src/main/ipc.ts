@@ -4,6 +4,15 @@ import { getMcpStatuses, getAllMcpStatuses } from './mcp-manager'
 import { spawnPty, writeToPty, resizePty, killPty } from './pty-manager'
 import { listSessionRecords, readSessionLog, searchSessions } from './session-manager'
 import {
+  listAgents as mpListAgents,
+  toggleStar as mpToggleStar,
+  cloneAgent as mpCloneAgent,
+  publishAgent as mpPublishAgent,
+  republishAgent as mpRepublishAgent,
+  updateMyAgentFromBody as mpUpdateMyFromBody,
+  deleteMyAgent as mpDeleteMyAgent
+} from './marketplace-manager'
+import {
   listAgents,
   getAgent,
   spawnAgent,
@@ -72,6 +81,27 @@ export function registerIpcHandlers(): void {
   )
   ipcMain.handle('instance:updateTag', (_event, agentId: string, instanceId: string, tag: string) =>
     updateInstanceTag(agentId, instanceId, tag)
+  )
+
+  // Marketplace handlers
+  ipcMain.handle('marketplace:list', () => mpListAgents())
+  ipcMain.handle('marketplace:toggleStar', (_event, marketplaceAgentId: string, starred: boolean) =>
+    mpToggleStar(marketplaceAgentId, starred)
+  )
+  ipcMain.handle('marketplace:clone', (_event, marketplaceAgentId: string) =>
+    mpCloneAgent(marketplaceAgentId)
+  )
+  ipcMain.handle('marketplace:publish', (_event, localAgentId: string) =>
+    mpPublishAgent(localAgentId)
+  )
+  ipcMain.handle('marketplace:republish', (_event, localAgentId: string) =>
+    mpRepublishAgent(localAgentId)
+  )
+  ipcMain.handle('marketplace:update', (_event, marketplaceAgentId: string, input: Parameters<typeof mpUpdateMyFromBody>[1]) =>
+    mpUpdateMyFromBody(marketplaceAgentId, input)
+  )
+  ipcMain.handle('marketplace:delete', (_event, marketplaceAgentId: string) =>
+    mpDeleteMyAgent(marketplaceAgentId)
   )
 
   // Session record handlers

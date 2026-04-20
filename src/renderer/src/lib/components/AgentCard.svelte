@@ -1,13 +1,16 @@
 <script lang="ts">
   import type { AgentDefinition, AgentInstance } from '../types'
-  import { showNewAgentModal, selectedAgentId, selectedInstanceId, showCreateAgentModal, editingAgentId, activeSessionId } from '../stores/ui'
+  import { showNewAgentModal, selectedAgentId, selectedInstanceId, showCreateAgentModal, editingAgentId, activeSessionId, sidebarTab } from '../stores/ui'
   import { sessions } from '../stores/sessions'
   import { deleteAgent, loadAgents } from '../stores/agents'
   import { cloneProgress } from '../stores/cloneProgress'
+  import { publishLocalAgent, republishMyMarketplaceAgent } from '../stores/marketplace'
   import CronModal from './CronModal.svelte'
   let { agent }: { agent: AgentDefinition } = $props()
 
   let showCronModal = $state(false)
+  let publishing = $state(false)
+  let republishing = $state(false)
 
   // Match on both agentId AND instanceId to avoid cross-agent false positives
   function sessionForInstance(instanceId: string) {
@@ -39,6 +42,37 @@
     e.stopPropagation()
     await window.api.instanceCreate(agent.id)
     await loadAgents()
+  }
+
+  async function handlePublish(e: MouseEvent) {
+    e.stopPropagation()
+    if (publishing) return
+    if (!confirm(`Publish "${agent.name}" to the marketplace? Anyone will be able to clone it. Only you can edit or delete it.`)) return
+    publishing = true
+    try {
+      await publishLocalAgent(agent.id)
+      await loadAgents()
+      sidebarTab.set('marketplace')
+    } catch (err) {
+      console.error('[agent-card] publish failed:', err)
+      alert('Publish failed: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      publishing = false
+    }
+  }
+
+  async function handleRepublish(e: MouseEvent) {
+    e.stopPropagation()
+    if (republishing) return
+    republishing = true
+    try {
+      await republishMyMarketplaceAgent(agent.id)
+    } catch (err) {
+      console.error('[agent-card] republish failed:', err)
+      alert('Republish failed: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      republishing = false
+    }
   }
 
   async function handleDeleteInstance(e: MouseEvent, instanceId: string) {
@@ -103,6 +137,21 @@
     <div class="agent-actions">
       <button class="action-btn" onclick={handleAddInstance} title="Add instance">+</button>
       <button class="action-btn cron-btn" onclick={(e) => { e.stopPropagation(); showCronModal = true }} title="Scheduled jobs">🕐</button>
+      {#if !agent.marketplaceAgentId}
+        <button
+          class="action-btn"
+          onclick={handlePublish}
+          disabled={publishing}
+          title="Publish to marketplace"
+        >📤</button>
+      {:else}
+        <button
+          class="action-btn republish-btn"
+          onclick={handleRepublish}
+          disabled={republishing}
+          title="Republish to marketplace (overwrite your published entry)"
+        >🔄</button>
+      {/if}
       <button class="action-btn" onclick={handleEdit} title="Edit">✏️</button>
       <button
         class="action-btn"
@@ -277,6 +326,15 @@
   .action-btn:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+  }
+
+  .republish-btn {
+    color: #f9e2af;
+  }
+
+  .republish-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, #f9e2af 14%, transparent);
+    color: #f9e2af;
   }
 
   .clone-progress {

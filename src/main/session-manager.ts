@@ -21,6 +21,7 @@ export interface SessionRecord {
   prompt: string
   logDir: string
   claudeSessionId?: string
+  marketplaceAgentId?: string
 }
 
 function dbRowToSessionRecord(row: Record<string, unknown>): SessionRecord {
@@ -36,11 +37,14 @@ function dbRowToSessionRecord(row: Record<string, unknown>): SessionRecord {
     durationMs: row.duration_ms as number | undefined,
     prompt: row.prompt as string,
     logDir: row.log_dir as string,
-    claudeSessionId: row.claude_session_id as string | undefined
+    claudeSessionId: row.claude_session_id as string | undefined,
+    marketplaceAgentId: (row.marketplace_agent_id as string | null) ?? undefined
   }
 }
 
-export async function addSessionRecord(record: SessionRecord): Promise<void> {
+export async function addSessionRecord(
+  record: SessionRecord & { marketplaceAgentId?: string }
+): Promise<void> {
   const input: CreateSessionInput = {
     agentId: record.agentId,
     agentName: record.agentName,
@@ -49,7 +53,8 @@ export async function addSessionRecord(record: SessionRecord): Promise<void> {
     instanceTag: record.instanceTag,
     prompt: record.prompt,
     logDir: record.logDir,
-    claudeSessionId: record.claudeSessionId
+    claudeSessionId: record.claudeSessionId,
+    marketplaceAgentId: record.marketplaceAgentId
   }
   await repoCreateSession(input)
 }

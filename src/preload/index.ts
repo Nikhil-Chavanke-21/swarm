@@ -88,6 +88,33 @@ const api = {
   sessionsReadLog: (sessionId: string, logDir: string) =>
     ipcRenderer.invoke('sessions:readLog', sessionId, logDir),
 
+  // Marketplace
+  marketplaceList: () => ipcRenderer.invoke('marketplace:list'),
+  marketplaceToggleStar: (marketplaceAgentId: string, starred: boolean) =>
+    ipcRenderer.invoke('marketplace:toggleStar', marketplaceAgentId, starred),
+  marketplaceClone: (marketplaceAgentId: string) =>
+    ipcRenderer.invoke('marketplace:clone', marketplaceAgentId),
+  marketplacePublish: (localAgentId: string) =>
+    ipcRenderer.invoke('marketplace:publish', localAgentId),
+  marketplaceRepublish: (localAgentId: string) =>
+    ipcRenderer.invoke('marketplace:republish', localAgentId),
+  marketplaceUpdate: (
+    marketplaceAgentId: string,
+    input: {
+      name: string
+      emoji: string
+      description: string
+      useWhen: string
+      claudeMdBody: string
+      args: { name: string; description: string; required: boolean; default?: string; options?: string[]; mcp?: string }[]
+      mcpRequirements: string[]
+      allowedCommands: string[]
+      repos: { name: string; url: string }[]
+    }
+  ) => ipcRenderer.invoke('marketplace:update', marketplaceAgentId, input),
+  marketplaceDelete: (marketplaceAgentId: string) =>
+    ipcRenderer.invoke('marketplace:delete', marketplaceAgentId),
+
   // Shell
   // MCP
   mcpStatuses: (names: string[]) => ipcRenderer.invoke('mcp:statuses', names),
